@@ -1,0 +1,18 @@
+[project]
+name = "stock-app"
+version = "0.1.0"
+description = "股市觀察工具 - 量化分析與選股篩選平台"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "matplotlib>=3.10.9",
+    "pandas>=3.0.2",
+    "pathlib>=1.0.1",
+    "pyarrow>=24.0.0",
+    "python-pptx>=1.0.2",
+    "requests>=2.33.1",
+    "tqdm>=4.67.3",
+    "streamlit>=1.28.0",
+    "plotly>=5.17.0",
+    "numpy>=1.24.0",
+]
