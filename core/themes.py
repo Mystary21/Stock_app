@@ -54,6 +54,72 @@ THEME_DICTIONARY = {
     },
 }
 
+from sqlalchemy.orm import Session
+from core.schema import StockThemeMapping  # 引入剛剛建立的 Model
+
+def get_all_themes(session: Session) -> list:
+    """取得目前系統內所有已存在（自訂 + 預設）的族群標籤"""
+    # 預設的基本族群
+    default_themes = ["第三代半導體", "光通訊", "AI 伺服器", "矽光子", "車用電子"]
+    
+    # 從資料庫中捞出使用者後來自己新增的標籤
+    db_themes = session.query(StockThemeMapping.theme_name).distinct().all()
+    db_themes_list = [t[0] for t in db_themes]
+    
+    # 合併去重
+    return list(set(default_themes + db_themes_list))
+
+def get_stocks_by_theme(session: Session, theme_name: str) -> list:
+    """根據族群名稱，找出目前底下所有的成分股"""
+    mappings = session.query(StockThemeMapping).filter(StockThemeMapping.theme_name == theme_name).all()
+    return [{"code": m.stock_code, "name": m.stock_name} for m in mappings]
+
+def get_themes_by_stock(session: Session, stock_code: str) -> list:
+    """根據股票代號，找出該個股目前被貼了哪些族群標籤"""
+    mappings = session.query(StockThemeMapping).filter(StockThemeMapping.stock_code == stock_code).all()
+    return [m.theme_name for m in mappings]
+
+def add_stock_to_theme(session: Session, stock_code: str, stock_name: str, theme_name: str):
+    """將某一檔股票塞入指定族群（防重複防呆機制）"""
+    exists = session.query(StockThemeMapping).filter(
+        StockThemeMapping.stock_code == stock_code,
+        StockThemeMapping.theme_name == theme_name
+    ).first()
+    
+    if not exists:
+        new_mapping = StockThemeMapping(
+            stock_code=stock_code,
+            stock_name=stock_name,
+            theme_name=theme_name.strip()
+        )
+        session.add(new_mapping)
+        session.commit()
+
+def remove_stock_from_theme(session: Session, stock_code: str, theme_name: str):
+    """將股票從該族群中移除"""
+    mapping = session.query(StockThemeMapping).filter(
+        StockThemeMapping.stock_code == stock_code,
+        StockThemeMapping.theme_name == theme_name
+    ).first()
+    if mapping:
+        session.delete(mapping)
+        session.commit()
+
+def update_stock_themes(session: Session, stock_code: str, stock_name: str, new_themes: list):
+    """更新單一個股的完整標籤包（最安全的人性化覆蓋邏輯：先刪舊的，再寫入新的）"""
+    # 1. 刪除該股舊有的所有族群對應
+    session.query(StockThemeMapping).filter(StockThemeMapping.stock_code == stock_code).delete()
+    
+    # 2. 重新寫入這次勾選的所有新族群
+    for theme in new_themes:
+        if theme.strip():
+            mapping = StockThemeMapping(
+                stock_code=stock_code,
+                stock_name=stock_name,
+                theme_name=theme.strip()
+            )
+            session.add(mapping)
+    session.commit()
 
 def seed_theme_tags(db_path: str = DB_PATH):
     """將主題字典的族群名稱寫入 Tag_Dim (含分類)"""

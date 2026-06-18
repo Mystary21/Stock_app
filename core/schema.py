@@ -16,7 +16,23 @@ import sqlite3
 
 DB_PATH = "stock_warehouse.db"
 
+from sqlalchemy import Column, String, Integer, DateTime, func
+from sqlalchemy.orm import declarative_base
 
+# 假設你專案中已有定義好的 Base，請沿用它
+Base = declarative_base()
+
+class StockThemeMapping(Base):
+    """自訂族群與股票的實時映射資料表"""
+    __tablename__ = 'stock_theme_mappings'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    stock_code = Column(String(20), nullable=False, index=True) # 股票代號 (例如: 3105)
+    stock_name = Column(String(50), nullable=True)               # 股票名稱 (例如: 穩懋)
+    theme_name = Column(String(50), nullable=False, index=True) # 族群標籤 (例如: 第三代半導體)
+    created_at = Column(DateTime, default=func.now())
+
+    
 def _column_exists(cursor, table: str, column: str) -> bool:
     cursor.execute(f"PRAGMA table_info({table})")
     return any(row[1] == column for row in cursor.fetchall())

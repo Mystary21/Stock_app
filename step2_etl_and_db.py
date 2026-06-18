@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 from tqdm import tqdm
 
+
 # 設定路徑
 STAGING_DIR = Path("staging")
 PARQUET_DIR = Path("parquet_data")

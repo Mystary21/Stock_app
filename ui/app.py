@@ -12,9 +12,114 @@ from core.filters import StockFilter, PredefinedFilters
 from backtesting.engine import BacktestEngine, StrategyLibrary
 
 # ============================================================================
-# Streamlit 頁面配置
+# 輔助函式：可搜尋股票下拉選單
 # ============================================================================
 
+def searchable_stock_select(label: str, key: str, all_stocks_df=None, separator: str = " - "):
+    """顯示一個含文字搜尋的股票下拉選單，回傳 股票代號"""
+    if all_stocks_df is None:
+        all_stocks_df = data_query.get_all_stocks()
+    options = {f"{row['證券代號']}{separator}{row['證券名稱']}": row['證券代號']
+               for _, row in all_stocks_df.iterrows()}
+    option_list = list(options.keys())
+
+    search = st.text_input(f"🔍 {label}", key=f"srch_{key}", placeholder="輸入代號或名稱搜尋後選取")
+    filtered = [o for o in option_list if not search or search.upper() in o.upper()]
+    if not filtered:
+        st.warning(f"無符合「{search}」的股票")
+        return None
+
+    selected = st.selectbox(label, filtered, key=f"sel_{key}")
+    return options[selected]
+
+# ============================================================================
+# Streamlit 頁面配置
+# ============================================================================
+def render_group_analysis_page():
+    st.title("🏷️ 族群分析")
+
+    all_stocks_df = data_query.get_all_stocks()
+    all_tags = data_query.get_all_tags()
+
+    # 取得各標籤的股票數量
+    tag_counts = {}
+    for tag in all_tags:
+        members = data_query.get_stocks_by_tag(tag)
+        tag_counts[tag] = len(members)
+
+    st.markdown("### 📌 所有族群")
+    if not all_tags:
+        st.info("尚無任何族群，請在下方建立")
+    else:
+        cols = st.columns(4)
+        for i, tag in enumerate(all_tags):
+            with cols[i % 4]:
+                if st.button(f"{tag} ({tag_counts.get(tag, 0)})", key=f"tag_btn_{tag}", use_container_width=True):
+                    st.session_state["selected_theme"] = tag
+
+    selected_theme = st.session_state.get("selected_theme", all_tags[0] if all_tags else None)
+    if not selected_theme and all_tags:
+        selected_theme = all_tags[0]
+
+    st.divider()
+
+    if selected_theme:
+        tab1, tab2 = st.tabs(["🔍 依族群管理股票", "🎯 依個股貼標籤"])
+
+        # ===== Tab 1: 依族群管理股票 =====
+        with tab1:
+            st.subheader(f"🏷️ {selected_theme}")
+            theme_stocks = data_query.get_stocks_by_tag(selected_theme)
+
+            st.write("成份股：")
+            if not theme_stocks.empty:
+                for _, row in theme_stocks.iterrows():
+                    col_a, col_b = st.columns([4, 1])
+                    col_a.write(f"📌 **{row['證券代號']} {row['證券名稱']}**")
+                    if col_b.button("🗑️ 移除", key=f"rm_{selected_theme}_{row['證券代號']}"):
+                        data_query.remove_stock_tag(row['證券代號'], selected_theme)
+                        st.rerun()
+            else:
+                st.info("此族群尚無成份股")
+
+            st.markdown("---")
+            chosen_code = searchable_stock_select("加入股票至此族群：", "group_add", all_stocks_df, separator=" ")
+            if chosen_code is not None and st.button("確認加入", type="primary", key="t1_submit"):
+                data_query.set_stock_tag(chosen_code, selected_theme, 0.9, "manual")
+                st.rerun()
+
+        # ===== Tab 2: 依個股貼標籤 =====
+        with tab2:
+            code2 = searchable_stock_select("選擇股票：", "stock_tag", all_stocks_df, separator=" ")
+            if code2 is None:
+                st.stop()
+            name2 = data_query.get_stock_by_id(code2).get('證券名稱', '')
+
+            current_tags_df = data_query.get_tags_of_stock(code2)
+            current_tag_names = current_tags_df['族群'].tolist() if not current_tags_df.empty else []
+
+            st.write(f"📈 **{code2} {name2}** 目前所屬族群：")
+            if current_tag_names:
+                st.markdown(" ".join([f"`{t}`" for t in current_tag_names]))
+            else:
+                st.caption("⚠️ 尚不屬於任何族群")
+
+            updated = st.multiselect(
+                "編輯族群標籤（可多選或輸入新名稱）：",
+                options=all_tags,
+                default=current_tag_names,
+                key="t2_tags"
+            )
+            if st.button("💾 儲存變更", type="primary", key="t2_save"):
+                # 先全部移除再重新加入
+                for tag in current_tag_names:
+                    data_query.remove_stock_tag(code2, tag)
+                for tag in updated:
+                    data_query.set_stock_tag(code2, tag, 0.9, "manual")
+                st.rerun()
+
+
+    
 st.set_page_config(
     page_title="股市觀察工具",
     page_icon="📈",
@@ -50,6 +155,7 @@ page = st.sidebar.radio(
         "🏠 首頁",
         "📈 單檔分析",
         "🏢 族群比較",
+        "🏷️ 族群分析",
         "🔍 選股篩選",
         "🎯 回測策略",
     ]
@@ -84,12 +190,18 @@ if page == "🏠 首頁":
     - 產業績效統計
     - 股票相關性分析
     
-    **3. 🔍 選股篩選** - 根據條件篩選股票
+    **3. 🏷️ 族群分析** - 互動式族群管理
+    - Tag 標籤雲快速選取族群
+    - 即時新增/移除股票至族群
+    - 個股多標籤編輯
+    - 資料庫即時同步
+    
+    **4. 🔍 選股篩選** - 根據條件篩選股票
     - 價格、成交量篩選
     - 技術指標篩選 (RSI、移動平均線等)
     - 預定義篩選組合 (看漲信號、超賣股等)
     
-    **4. 🎯 回測策略** - 測試量化策略
+    **5. 🎯 回測策略** - 測試量化策略
     - SMA 交叉策略
     - RSI 超買超賣策略
     - MACD 策略
@@ -141,18 +253,10 @@ if page == "🏠 首頁":
 elif page == "📈 單檔分析":
     st.title("📈 單檔股票分析")
     
-    # 股票選擇
-    all_stocks = data_query.get_all_stocks()
-    stock_options = {f"{row['證券代號']} - {row['證券名稱']}": row['證券代號'] 
-                    for _, row in all_stocks.iterrows()}
-    
-    selected_option = st.selectbox(
-        "選擇股票",
-        options=list(stock_options.keys()),
-        format_func=lambda x: x
-    )
-    
-    stock_id = stock_options[selected_option]
+    # 股票選擇（含搜尋）
+    stock_id = searchable_stock_select("選擇股票", "single_stock")
+    if stock_id is None:
+        st.stop()
     
     # 取得股票資訊
     stock_info = data_query.get_stock_by_id(stock_id)
@@ -469,12 +573,9 @@ elif page == "🏢 族群比較":
         st.subheader("✏️ 族群編輯 (手動標記股票)")
         st.caption("根據你對公司基本面/法說會/Guidance 的研究，將股票歸入族群")
 
-        all_stocks = data_query.get_all_stocks()
-        stock_options = {f"{row['證券代號']} - {row['證券名稱']}": row['證券代號']
-                        for _, row in all_stocks.iterrows()}
-
-        edit_stock_opt = st.selectbox("選擇股票", list(stock_options.keys()), key="edit_stock")
-        edit_stock_id = stock_options[edit_stock_opt]
+        edit_stock_id = searchable_stock_select("選擇股票", "edit_stock")
+        if edit_stock_id is None:
+            st.stop()
 
         # 顯示該股票目前所屬族群
         st.markdown("#### 目前所屬族群")
@@ -521,6 +622,13 @@ elif page == "🏢 族群比較":
                     st.rerun()
             else:
                 st.caption("無可移除的族群")
+
+# ============================================================================
+# 族群分析頁面 (互動式族群管理)
+# ============================================================================
+
+elif page == "🏷️ 族群分析":
+    render_group_analysis_page()
 
 # ============================================================================
 # 選股篩選頁面
@@ -648,19 +756,12 @@ elif page == "🔍 選股篩選":
 elif page == "🎯 回測策略":
     st.title("🎯 量化策略回測")
     
-    # 股票選擇
-    all_stocks = data_query.get_all_stocks()
-    stock_options = {f"{row['證券代號']} - {row['證券名稱']}": row['證券代號'] 
-                    for _, row in all_stocks.iterrows()}
-    
     col1, col2 = st.columns(2)
     
     with col1:
-        selected_option = st.selectbox(
-            "選擇股票",
-            options=list(stock_options.keys())
-        )
-        stock_id = stock_options[selected_option]
+        stock_id = searchable_stock_select("選擇股票", "backtest_stock")
+        if stock_id is None:
+            st.stop()
     
     with col2:
         strategy = st.selectbox(
