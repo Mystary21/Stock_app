@@ -57,13 +57,15 @@ def clean_and_transform(df, date_str):
             
     return df[target_columns]
 
-def init_sqlite_schema(latest_companies_df):
+def init_sqlite_schema(latest_companies_df, otc_codes: set = None):
     """建置關聯式資料庫 (Star Schema)"""
+    if otc_codes is None:
+        otc_codes = set()
     print("\n[DB] 正在初始化 SQLite 資料庫與維度表...")
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
-    # 1. Company_Dim (股票總覽表)
+    # 1. Company_Dim (股票總覽表，含上市/上櫃狀態)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS Company_Dim (
             證券代號 TEXT PRIMARY KEY,
@@ -105,101 +107,123 @@ def init_sqlite_schema(latest_companies_df):
         )
     ''')
 
-    # 寫入最新股票清單到 Company_Dim
-    # 使用 INSERT OR REPLACE 確保名稱如果有更動會自動更新
+    # 寫入最新股票清單到 Company_Dim (含上市/上櫃狀態)
     latest_companies_df = latest_companies_df[['證券代號', '證券名稱']].drop_duplicates()
     for _, row in latest_companies_df.iterrows():
+        code = str(row['證券代號']).strip()
+        status = '上櫃' if code in otc_codes else '上市'
         cursor.execute('''
-            INSERT OR REPLACE INTO Company_Dim (證券代號, 證券名稱) 
-            VALUES (?, ?)
-        ''', (str(row['證券代號']).strip(), str(row['證券名稱']).strip()))
+            INSERT OR REPLACE INTO Company_Dim (證券代號, 證券名稱, 狀態) 
+            VALUES (?, ?, ?)
+        ''', (code, str(row['證券名稱']).strip(), status))
 
     conn.commit()
     conn.close()
-    print(f"[DB] 成功寫入 {len(latest_companies_df)} 檔股票資料至 Company_Dim。")
+    counts = {'上市': 0, '上櫃': 0}
+    for code in latest_companies_df['證券代號'].astype(str).str.strip():
+        counts['上櫃' if code in otc_codes else '上市'] += 1
+    print(f"[DB] 成功寫入 {len(latest_companies_df)} 檔股票 (上市 {counts['上市']} / 上櫃 {counts['上櫃']})")
+
+def _parse_json_to_df(file_path: Path):
+    """解析單一 JSON 檔 (支援 TWSE 或 TPEx/OTC 格式) 回傳 (date_str, DataFrame) 或 None"""
+    raw_date = file_path.stem.replace('OTC_', '')
+    if len(raw_date) != 8:
+        return None
+    date_str = f"{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:8]}"
+
+    with open(file_path, 'r', encoding='utf-8') as f:
+        raw_json = json.load(f)
+
+    target_data, target_fields = None, None
+
+    # 第一軌: tables 陣列 (新 TWSE API)
+    if 'tables' in raw_json and isinstance(raw_json['tables'], list):
+        for table in raw_json['tables']:
+            if 'fields' in table and 'data' in table:
+                clean = [str(c).replace(' ', '').replace('　', '').replace('\n', '').strip() for c in table['fields']]
+                if '證券代號' in clean:
+                    target_data, target_fields = table['data'], clean
+                    break
+
+    # 第二軌: fields9/data9 (舊 TWSE API / TPEx 格式)
+    if not target_data:
+        for key, val in raw_json.items():
+            if key.startswith('fields') and isinstance(val, list):
+                clean = [str(c).replace(' ', '').replace('　', '').replace('\n', '').strip() for c in val]
+                if '證券代號' in clean:
+                    dk = key.replace('fields', 'data')
+                    if dk in raw_json:
+                        target_data, target_fields = raw_json[dk], clean
+                        break
+
+    if not target_data:
+        print(f"\n[Debug] {file_path.name} 找不到證券代號！")
+        return None
+
+    df = pd.DataFrame(target_data, columns=target_fields)
+    return date_str, df
+
 
 def main():
-    json_files = sorted(list(STAGING_DIR.glob("*.json")))
-    if not json_files:
+    # 掃描所有 TWSE 與 OTC 暫存檔
+    twse_files = sorted([f for f in STAGING_DIR.glob("*.json") if not f.name.startswith("OTC_")])
+    otc_files  = sorted([f for f in STAGING_DIR.glob("OTC_*.json")])
+    all_files  = twse_files + otc_files
+
+    if not all_files:
         print("沒有找到 JSON 暫存檔，請先執行 step1_fetcher.py")
         return
 
-    print(f"開始處理 {len(json_files)} 個 JSON 檔案...")
+    print(f"開始處理 {len(twse_files)} 個上市 + {len(otc_files)} 個上櫃 JSON 檔案...")
     all_dfs = []
-    
-    # 用於捕捉最新一天的資料，以建立 Company_Dim
-    latest_day_df = None 
+    otc_codes = set()
+    all_stocks_seen = {}  # code -> name (所有出現過的股票)
+    latest_day_df = None
 
-    for file_path in tqdm(json_files, desc="讀取與清洗資料"):
-        # 從檔名取得日期，例如 20060102.json -> 2006-01-02
-        raw_date = file_path.stem
-        date_str = f"{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:8]}"
-        
-        with open(file_path, 'r', encoding='utf-8') as f:
-            raw_json = json.load(f)
-            
-        target_data, target_fields = None, None
-        
-        target_data, target_fields = None, None
-        
-        # 🌟 第一軌：嘗試解析新版 TWSE API 結構 ('tables' 陣列)
-        if 'tables' in raw_json and isinstance(raw_json['tables'], list):
-            for table in raw_json['tables']:
-                if 'fields' in table and 'data' in table:
-                    clean_fields = [str(col).replace(' ', '').replace('　', '').replace('\n', '').strip() for col in table['fields']]
-                    if '證券代號' in clean_fields:
-                        target_data = table['data']
-                        target_fields = clean_fields
-                        break
-
-        # 🌟 第二軌：如果新版沒找到，嘗試解析舊版 TWSE API 結構 (fields9 / data9)
-        if not target_data:
-            for key, val in raw_json.items():
-                if key.startswith('fields') and isinstance(val, list):
-                    clean_fields = [str(col).replace(' ', '').replace('　', '').replace('\n', '').strip() for col in val]
-                    if '證券代號' in clean_fields:
-                        data_key = key.replace('fields', 'data')
-                        if data_key in raw_json:
-                            target_data = raw_json[data_key]
-                            target_fields = clean_fields
-                            break
-                            
-        # 最終防線 Debug
-        if not target_data:
-            print(f"\n[Debug] {date_str} 完全找不到證券代號！檔案 Keys: {list(raw_json.keys())}")
+    for file_path in tqdm(all_files, desc="讀取與清洗資料"):
+        parsed = _parse_json_to_df(file_path)
+        if parsed is None:
             continue
-        
-        if target_data and target_fields:
-            df = pd.DataFrame(target_data, columns=target_fields)
-            cleaned_df = clean_and_transform(df, date_str)
-            all_dfs.append(cleaned_df)
-            latest_day_df = cleaned_df # 迴圈跑完時，這會是最新一天的資料
+        date_str, df = parsed
+        cleaned_df = clean_and_transform(df, date_str)
+        all_dfs.append(cleaned_df)
 
-    print("\n資料清洗完成，正在進行記憶體大合併 (The Great Pivot)...")
-    # 將所有日期的資料合併成一個超級大表 (8百萬筆資料在 pandas 大約幾秒鐘)
+        # 收集所有出現過的股票
+        for _, row in cleaned_df.iterrows():
+            code = str(row['證券代號']).strip()
+            name = str(row['證券名稱']).strip()
+            all_stocks_seen[code] = name
+
+        # 累計 OTC 股票代號
+        if file_path.name.startswith("OTC_"):
+            codes = cleaned_df['證券代號'].astype(str).str.strip().unique()
+            otc_codes.update(codes)
+
+        # 追蹤最新一天的資料 (用於 Company_Dim)
+        if latest_day_df is None or date_str > latest_day_df['日期'].iloc[0]:
+            latest_day_df = cleaned_df
+
+    # 用所有出現過的股票建立 Company_Dim (而非只用最新一天)
+    if all_stocks_seen:
+        all_stocks_df = pd.DataFrame([
+            {'證券代號': k, '證券名稱': v} for k, v in all_stocks_seen.items()
+        ])
+        init_sqlite_schema(all_stocks_df, otc_codes)
+    elif latest_day_df is not None:
+        init_sqlite_schema(latest_day_df, otc_codes)
+
+    print("\n資料清洗完成，正在合併所有資料...")
     master_df = pd.concat(all_dfs, ignore_index=True)
-    
-    # 初始化資料庫 (傳入最後一天的資料來建立股票清單)
-    if latest_day_df is not None:
-        init_sqlite_schema(latest_day_df)
 
     print("\n正在按證券代號分割並寫入 Parquet...")
-    # 將不要的 "證券名稱" 從 Parquet 準備名單中踢掉 (它已經存在 SQLite 了)
     master_df = master_df.drop(columns=['證券名稱'])
-    
-    # 按照證券代號分組並存檔
     groups = master_df.groupby('證券代號')
     for stock_id, group_df in tqdm(groups, desc="寫入 Parquet"):
-        clean_stock_id = str(stock_id).strip()
-        # 剔除可能造成檔名異常的字元
-        clean_stock_id = re.sub(r'[\\/*?:"<>|]', "", clean_stock_id)
-        if not clean_stock_id:
+        clean_id = re.sub(r'[\\/*?:"<>|]', "", str(stock_id).strip())
+        if not clean_id:
             continue
-            
-        # 確保資料依照日期排序
         group_df = group_df.sort_values(by='日期').reset_index(drop=True)
-        save_path = PARQUET_DIR / f"{clean_stock_id}.parquet"
-        group_df.to_parquet(save_path, index=False)
+        group_df.to_parquet(PARQUET_DIR / f"{clean_id}.parquet", index=False)
 
     print("\n✅ ETL 流程與資料庫建置大功告成！")
 
