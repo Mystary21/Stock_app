@@ -1,44 +1,90 @@
-# 📊 股市觀察工具
+#  股市觀察工具
 
-量化分析與選股篩選平台 - 支援單檔分析、族群比較、自動篩選、策略回測
+量化分析與選股篩選平台 — 支援上市（TWSE）+ 上櫃（TPEx）超過 11,700 檔商品
 
-## 🎯 核心功能
+##  核心功能
 
-### 1. 📈 單檔股票分析
-- **K線圖與移動平均線**: 視覺化股價走勢
-- **技術指標**: RSI、MACD、布林帶、隨機指標等
-- **歷史數據**: 完整的價格和成交量資訊
+### 1.  單檔股票分析
+- **K 線圖與移動平均線**: MA20/MA50/MA200，支援買賣訊號標記
+- **技術指標**: RSI、MACD、布林帶、隨機指標、ATR
+- **歷史數據**: 上市 10 年 + 上櫃近 6 個月完整日資料
 
-### 2. 🏢 族群比較分析
+### 2.  族群比較分析
 - **產業內對比**: 比較同產業不同股票表現
 - **產業領頭股**: 按成交金額、價格等排序
 - **漲跌排行**: 快速掌握贏家與輸家
 - **相關性分析**: 計算產業內股票相關係數
 
-### 3. 🔍 選股篩選
+### 3.  選股篩選
 - **預定義篩選**:
-  - 看漲信號 (黃金交叉 + 價格 > SMA20)
-  - 超賣股票 (RSI < 30)
-  - 超買股票 (RSI > 70)
+  - 看漲信號（黃金交叉 + 價格 > SMA20）
+  - 超賣股票（RSI < 30）
+  - 超買股票（RSI > 70）
   - 成交量大漲股
 - **自訂篩選**: 組合多個條件進行複雜篩選
-  - 價格範圍
-  - 成交量
-  - 技術指標
-  - 產業類別
+  - 價格範圍、成交量、技術指標、產業類別
 
-### 4. 🎯 量化策略回測
-- **SMA 交叉策略**: 20日線與50日線交叉
+### 4.  族群分析（標籤系統）
+- **自訂標籤**: 任意建立/刪除族群標籤（如「AI 概念股」、「高股息」）
+- **多對多映射**: 一檔股票可打多個標籤，一個標籤可含多檔股票
+- **即時持久化**: 所有標籤異動立即寫入 SQLite，頁面重整不遺失
+- **批次操作**: 支援全選、批次貼標/去標
+- **搜尋式股票選擇器**: 支援文字搜尋（如輸入「穩懋」過濾清單）
+
+### 5.  量化策略回測
+- **SMA 交叉策略**: 20 日線與 50 日線交叉
 - **RSI 策略**: 超買超賣反轉策略
 - **MACD 策略**: 動量指標策略
 - **完整指標**:
-  - 總報酬率
-  - 年化報酬率
-  - 最大虧損
-  - 勝率
+  - 總報酬率、年化報酬率、最大虧損、勝率
   - 交易清單與組合淨值曲線
 
-## 🚀 快速開始
+---
+
+##  數據流水線
+
+```
+   TWSE (上市)           TPEx (上櫃)
+  API daily       API daily (verify=False)
+     │                    │
+     ▼                    ▼
+  20260619.json    OTC_20260619.json
+     │                    │
+     └────────┬───────────┘
+              ▼
+    step2_etl_and_db.py (增量/完整重建)
+              │
+     ┌────────┴────────┐
+     ▼                  ▼
+  stock_warehouse.db   parquet_data/
+  ┌─────────────────┐  └─ 2330.parquet
+  │ Company_Dim      │  └─ 3105.parquet
+  │ Tag_Dim          │  └─ ...
+  │ Company_Tag_Map  │
+  │ ETL_Status       │
+  │ Dividend_Fact    │
+  └─────────────────┘
+     │
+     ▼
+  [Web 儀表板 / CLI]
+```
+
+### 增量處理
+
+```
+每日更新: fetch_data.py
+  1. 檢查 task_status.db → 只抓 pending 日期
+  2. 抓取 TWSE + OTC（新 API）
+  3. 增量 ETL → 只處理新 JSON，附加到既有 Parquet
+  4. 完成（通常 < 5 秒）
+
+完整重建: fetch_data.py --rebuild
+  重新處理 staging/ 中所有 JSON，完整寫入 DB + Parquet
+```
+
+---
+
+##  快速開始
 
 ### 安裝依賴
 
@@ -46,13 +92,40 @@
 pip install -r requirements.txt
 ```
 
-### 啟動 Web 儀表板
+### 一鍵更新資料 + 啟動
 
 ```bash
-python main.py web
+# 日常更新（增量模式）
+python fetch_data.py
+
+# 啟動儀表板
+python main.py web --port 8503
 ```
 
-瀏覽器自動打開: `http://localhost:8501`
+瀏覽器自動打開: `http://localhost:8503`
+
+### fetch_data.py 完整用法
+
+```bash
+python fetch_data.py                              # 抓取 + 增量 ETL
+python fetch_data.py --end 2026-06-17             # 到指定日期
+python fetch_data.py --start 2025-01-01           # 指定開始日期
+python fetch_data.py --etl-only                   # 只跑 ETL（增量）
+python fetch_data.py --fetch-only                 # 只抓取
+python fetch_data.py --rebuild                    # 增量 ETL（完整重建）
+python fetch_data.py --with-fundamentals          # 含基本面（產業/營收/法說）
+python fetch_data.py --fundamentals-only          # 只抓基本面
+```
+
+或分步驟執行:
+
+```bash
+python step1_fetcher.py                           # Step 1: 抓取
+python step2_etl_and_db.py                        # Step 2: 增量 ETL（預設）
+python step2_etl_and_db.py --rebuild              # Step 2: 完整重建
+python step3_fundamentals.py --industry-only      # Step 3: 產業別
+python step3_fundamentals.py                      # Step 3: 營收 + 法說
+```
 
 ### 命令行使用
 
@@ -76,46 +149,73 @@ python main.py list_industries
 python main.py list_stocks
 ```
 
-## 📦 項目結構
+---
+
+##  項目結構
 
 ```
 stock_app/
 ├── core/
-│   ├── data.py           # 統一數據查詢 API
+│   ├── data.py           # 統一數據查詢 API（SQLite + Parquet）
 │   ├── analysis.py       # 技術指標與族群分析
-│   └── filters.py        # 股票篩選引擎
+│   ├── filters.py        # 股票篩選引擎
+│   ├── themes.py         # 族群自動標籤（基於關鍵字）
+│   ├── database.py       # SQLAlchemy engine + session（供 init_db 使用）
+│   └── schema.py         # DB schema 升級（migrate）
+├── ui/
+│   └── app.py            # Streamlit Web 應用（含 族群分析 頁面）
 ├── backtesting/
 │   └── engine.py         # 回測框架
-├── ui/
-│   └── app.py           # Streamlit Web 應用
-├── step1_fetcher.py      # 數據獲取（TWSE API）
-├── step2_etl_and_db.py   # 數據清洗與入庫
-├── main.py              # 主入口
-├── pyproject.toml       # 項目配置
-└── README.md
+├── step1_fetcher.py       # 數據獲取（TWSE + TPEx API）
+├── step2_etl_and_db.py    # ETL 清洗入庫（增量/重建雙模式）
+├── step3_fundamentals.py  # 基本面抓取（產業/營收/法說會）
+├── fetch_data.py          # 一鍵更新腳本
+├── main.py                # CLI 主入口
+├── init_db.py             # DB 初始化
+├── stock_warehouse.db     # 主要資料庫
+├── task_status.db         # 抓取狀態追蹤
+├── pyproject.toml         # 項目配置
+├── requirements.txt       # 依賴清單
+├── README.md
+├── ARCHITECTURE.md
+└── QUICKSTART.md
 ```
 
-## 🔄 數據流
+---
 
-```
-TWSE API → staging/ (JSON) → ETL清洗 → SQLite (Company_Dim, Tag_Dim, Dividend_Fact)
-                                      → Parquet (按股票代號分檔)
-                                      
-↓
-[Web儀表板 / 分析工具]
-```
+##  資料庫架構
 
-## 📊 技術棧
+### stock_warehouse.db
+
+| 表 | 說明 | 筆數 |
+|-----|------|------|
+| `Company_Dim` | 股票維度（含上市/上櫃狀態） | 11,718 |
+| `Tag_Dim` | 族群標籤 | 動態 |
+| `Company_Tag_Map` | 股票 ↔ 標籤多對多 | 動態 |
+| `Dividend_Fact` | 除權息事件 | 動態 |
+| `ETL_Status` | JSON 檔案處理狀態追蹤 | 9,810 |
+
+### task_status.db
+
+| 表 | 說明 |
+|-----|------|
+| `fetch_status` | 每日期抓取狀態（pending/success/error） |
+
+---
+
+##  技術棧
 
 - **後端**: Python 3.12+
 - **數據處理**: Pandas, NumPy
 - **可視化**: Plotly, Streamlit
-- **數據存儲**: SQLite, Parquet
-- **數據源**: 台灣證券交易所 (TWSE)
+- **數據存儲**: SQLite, Parquet（按股票代號分檔）
+- **數據源**:
+  - 台灣證券交易所 (TWSE) — 上市股票
+  - 櫃買中心 (TPEx) — 上櫃股票
 
-## 📈 技術指標
+---
 
-支援以下技術指標:
+##  技術指標
 
 | 指標 | 說明 | 用途 |
 |-----|------|------|
@@ -127,122 +227,51 @@ TWSE API → staging/ (JSON) → ETL清洗 → SQLite (Company_Dim, Tag_Dim, Div
 | **ATR** | 平均真實波幅 | 波動率 |
 | **Stochastic** | 隨機指標 | 超買/超賣 |
 
-## ⚙️ 核心類
+---
 
-### StockDataQuery
+##  API 速查
+
 ```python
 from core.data import data_query
 
-# 取得股票信息
 stock = data_query.get_stock_by_id("2330")
-
-# 取得歷史價格
 df = data_query.get_stock_price_history("2330", "2024-01-01", "2024-12-31")
-
-# 取得產業股票
 stocks = data_query.get_stocks_by_industry("半導體")
-```
 
-### StockAnalyzer
-```python
 from core.analysis import StockAnalyzer
-
 analyzer = StockAnalyzer("2330")
 indicators = analyzer.get_latest_indicators()
-summary = analyzer.get_analysis_summary()
-```
 
-### StockFilter
-```python
-from core.filters import StockFilter
-
+from core.filters import StockFilter, PredefinedFilters
 results = (StockFilter()
     .filter_by_price_range(100, 500)
     .filter_by_rsi(max_rsi=70)
     .filter_by_industry("半導體")
     .execute())
-```
 
-### BacktestEngine
-```python
+from core.themes import auto_tag_all_companies, get_stocks_by_tag
+tech_stocks = get_stocks_by_tag("半導體")
+
 from backtesting.engine import BacktestEngine, StrategyLibrary
-
 engine = BacktestEngine("2330", "2024-01-01", "2024-12-31")
 engine.add_signal(StrategyLibrary.sma_crossover_strategy)
 results = engine.backtest()
 ```
 
-## 📝 使用範例
-
-### 1. 分析 TSMC (2330)
-
-```python
-from core.analysis import StockAnalyzer
-
-analyzer = StockAnalyzer("2330")
-indicators = analyzer.get_latest_indicators()
-print(indicators)
-
-# 輸出:
-# {
-#   '日期': '2024-12-31',
-#   '收盤價': 995.0,
-#   '漲跌': -5.0,
-#   'SMA_20': 980.5,
-#   'RSI_14': 45.2,
-#   'MACD': 0.0523,
-#   ...
-# }
-```
-
-### 2. 比較半導體產業
-
-```python
-from core.analysis import IndustryComparison
-
-stats = IndustryComparison.compare_industry_performance("半導體")
-print(stats)
-
-gainers, losers = IndustryComparison.get_industry_gainers_losers("半導體")
-```
-
-### 3. 篩選看漲信號
-
-```python
-from core.filters import PredefinedFilters
-
-bullish_stocks = PredefinedFilters.bullish_signal()
-print(bullish_stocks)
-```
-
-### 4. 回測 SMA 策略
-
-```python
-from backtesting.engine import BacktestEngine, StrategyLibrary
-
-engine = BacktestEngine("2330", "2024-01-01", "2024-12-31", 100000)
-engine.add_signal(StrategyLibrary.sma_crossover_strategy)
-results = engine.backtest()
-
-print(f"總報酬率: {results['總報酬率%']}%")
-print(f"勝率: {results['勝率%']}%")
-```
+---
 
 ## ⚠️ 免責聲明
 
 本工具僅供分析參考，**不構成投資建議**。股票投資存在風險，應進行充分的風險評估。
 
-## 📄 數據來源
+##  數據來源
 
-- **數據提供者**: 台灣證券交易所 (TWSE)
-- **更新頻率**: 每個交易日
-- **歷史數據**: 2016 年至今
-
-## 📧 反饋與改進
-
-如有任何建議或發現問題，歡迎提出。
+- **上市**: 台灣證券交易所 (TWSE) — `https://www.twse.com.tw/`
+- **上櫃**: 櫃買中心 (TPEx) — `https://www.tpex.org.tw/`
+- **更新頻率**: 每個交易日（增量模式）
+- **歷史數據**: 上市 2016 年至今，上櫃 2016 年至今（99.9% 覆蓋率）
 
 ---
 
-**版本**: 1.0.0  
-**最後更新**: 2026-06-18
+**版本**: 2.0.0  
+**最後更新**: 2026-06-23
