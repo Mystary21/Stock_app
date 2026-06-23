@@ -3,11 +3,12 @@
 fetch_data.py - 一鍵資料抓取 + 清洗 + 入庫
 
 用法:
-    python fetch_data.py                     # 抓取到今天
+    python fetch_data.py                     # 抓取到今天 (增量 ETL)
     python fetch_data.py --end 2026-06-17    # 抓取到指定日期
     python fetch_data.py --start 2025-01-01  # 指定開始日期
-    python fetch_data.py --etl-only          # 只跑 ETL，不重新抓取
+    python fetch_data.py --etl-only          # 只跑 ETL (增量模式)
     python fetch_data.py --fetch-only        # 只抓取，不跑 ETL
+    python fetch_data.py --rebuild           # 完整重建 ETL (處理所有 JSON)
 """
 
 import argparse
@@ -103,14 +104,18 @@ def run_fetcher(start_date: str, end_date: str):
     print("\n✅ 資料抓取完成！")
 
 
-def run_etl():
+def run_etl(rebuild: bool = False):
     """執行 Step 2: ETL 清洗與資料庫建置"""
+    mode = "完整重建" if rebuild else "增量處理"
     print("\n" + "=" * 60)
-    print("🔄 Step 2 / 2 — ETL 清洗並寫入資料庫")
+    print(f"🔄 Step 2 / 2 — ETL {mode}")
     print("=" * 60)
 
     import step2_etl_and_db as s2
-    s2.main()
+    if rebuild:
+        s2.rebuild_main()
+    else:
+        s2.incremental_main()
 
 
 def run_fundamentals(months: int = 3):
@@ -169,6 +174,10 @@ def main():
         "--fundamentals-only", action="store_true",
         help="只抓基本面資料 (不抓股價)"
     )
+    parser.add_argument(
+        "--rebuild", action="store_true",
+        help="完整重建 ETL (重新處理所有 JSON，預設為增量模式)"
+    )
 
     args = parser.parse_args()
 
@@ -195,13 +204,13 @@ def main():
     if args.fundamentals_only:
         run_fundamentals()
     elif args.etl_only:
-        run_etl()
+        run_etl(rebuild=args.rebuild)
     elif args.fetch_only:
         run_fetcher(args.start, args.end)
     else:
-        # 預設：抓取 + ETL
+        # 預設：抓取 + ETL (增量)
         run_fetcher(args.start, args.end)
-        run_etl()
+        run_etl(rebuild=args.rebuild)
         if args.with_fundamentals:
             run_fundamentals()
 

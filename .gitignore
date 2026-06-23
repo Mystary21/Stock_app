@@ -1,0 +1,4 @@
+parquet_data/
+staging/
+__pycache__/
+*.pyc

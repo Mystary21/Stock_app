@@ -3,6 +3,7 @@ import json
 import sqlite3
 import pandas as pd
 import re
+import argparse
 from pathlib import Path
 from tqdm import tqdm
 
@@ -14,6 +15,64 @@ DB_PATH = "stock_warehouse.db"
 
 # 確保輸出資料夾存在
 PARQUET_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# ═══════════════════════════════════════════════
+#  ETL 狀態追蹤 (增量處理核心)
+# ═══════════════════════════════════════════════
+
+def init_etl_status():
+    """建立 ETL_Status 追蹤表，並同步 staging 目錄的檔案清單"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS ETL_Status (
+            檔案名稱 TEXT PRIMARY KEY,
+            日期 TEXT,
+            市場 TEXT,
+            狀態 TEXT DEFAULT 'pending',
+            更新時間 TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    # 掃描 staging 中所有 JSON，確保都有記錄
+    for f in STAGING_DIR.glob("*.json"):
+        fname = f.name
+        if fname.startswith("OTC_"):
+            market, raw = 'TPEx', fname.replace('OTC_', '').replace('.json', '')
+        else:
+            market, raw = 'TWSE', fname.replace('.json', '')
+        if len(raw) != 8:
+            continue
+        date_str = f"{raw[:4]}-{raw[4:6]}-{raw[6:8]}"
+        cursor.execute('''
+            INSERT OR IGNORE INTO ETL_Status (檔案名稱, 日期, 市場, 狀態)
+            VALUES (?, ?, ?, 'pending')
+        ''', (fname, date_str, market))
+    conn.commit()
+    conn.close()
+
+
+def get_pending_files():
+    """回傳尚未 ETL 的檔案名稱列表"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT 檔案名稱 FROM ETL_Status WHERE 狀態 = 'pending' ORDER BY 日期 ASC")
+    pending = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    return pending
+
+
+def mark_etl_done(filenames):
+    """將指定檔案標記為 ETL 完成"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    for fname in filenames:
+        cursor.execute(
+            "UPDATE ETL_Status SET 狀態='done', 更新時間=CURRENT_TIMESTAMP WHERE 檔案名稱=?",
+            (fname,)
+        )
+    conn.commit()
+    conn.close()
 
 def clean_and_transform(df, date_str):
     """資料清洗與轉換核心邏輯"""
@@ -107,15 +166,22 @@ def init_sqlite_schema(latest_companies_df, otc_codes: set = None):
         )
     ''')
 
-    # 寫入最新股票清單到 Company_Dim (含上市/上櫃狀態)
+    # 寫入最新股票清單到 Company_Dim (含上市/上櫃狀態，保留既有產業類別)
     latest_companies_df = latest_companies_df[['證券代號', '證券名稱']].drop_duplicates()
     for _, row in latest_companies_df.iterrows():
         code = str(row['證券代號']).strip()
         status = '上櫃' if code in otc_codes else '上市'
+        name = str(row['證券名稱']).strip()
+        # 先嘗試更新已存在的股票 (保留產業類別)
         cursor.execute('''
-            INSERT OR REPLACE INTO Company_Dim (證券代號, 證券名稱, 狀態) 
-            VALUES (?, ?, ?)
-        ''', (code, str(row['證券名稱']).strip(), status))
+            UPDATE Company_Dim SET 證券名稱 = ?, 狀態 = ?, 更新時間 = CURRENT_TIMESTAMP
+            WHERE 證券代號 = ?
+        ''', (name, status, code))
+        if cursor.rowcount == 0:
+            # 不存在才新增
+            cursor.execute('''
+                INSERT INTO Company_Dim (證券代號, 證券名稱, 狀態) VALUES (?, ?, ?)
+            ''', (code, name, status))
 
     conn.commit()
     conn.close()
@@ -164,8 +230,92 @@ def _parse_json_to_df(file_path: Path):
     return date_str, df
 
 
-def main():
-    # 掃描所有 TWSE 與 OTC 暫存檔
+def incremental_main():
+    """增量 ETL：只處理尚未 ETL 的 JSON 檔案，附加到現有 Parquet"""
+    init_etl_status()
+    pending = get_pending_files()
+
+    if not pending:
+        print("✅ 所有 JSON 檔案已完成 ETL，無需處理")
+        return
+
+    print(f"📦 發現 {len(pending)} 個未處理的 JSON 檔案")
+
+    # Step 1: 解析所有 pending 檔案
+    all_new_data = []
+    otc_codes = set()
+    new_stocks = {}
+    valid_pending = []
+
+    for fname in tqdm(pending, desc="讀取 JSON"):
+        file_path = STAGING_DIR / fname
+        if not file_path.exists():
+            continue
+        parsed = _parse_json_to_df(file_path)
+        if parsed is None:
+            continue
+        date_str, df = parsed
+        cleaned = clean_and_transform(df, date_str).copy()
+        cleaned['_source_file'] = fname
+
+        if fname.startswith("OTC_"):
+            otc_codes.update(cleaned['證券代號'].astype(str).str.strip().unique())
+
+        for _, row in cleaned.iterrows():
+            new_stocks[str(row['證券代號']).strip()] = str(row['證券名稱']).strip()
+
+        all_new_data.append(cleaned)
+        valid_pending.append(fname)
+
+    if not all_new_data:
+        print("⚠️  沒有可處理的有效資料")
+        return
+
+    # Step 2: 按股票分組，附加到 parquet
+    new_df = pd.concat(all_new_data, ignore_index=True)
+    new_df_no_name = new_df.drop(columns=['證券名稱', '_source_file'])
+    stock_groups = list(new_df_no_name.groupby('證券代號'))
+
+    for stock_id, group_df in tqdm(stock_groups, desc="寫入 Parquet"):
+        clean_id = re.sub(r'[\\/*?:"<>|]', "", str(stock_id).strip())
+        if not clean_id:
+            continue
+        parquet_path = PARQUET_DIR / f"{clean_id}.parquet"
+        group_df = group_df.sort_values('日期')
+
+        if parquet_path.exists():
+            existing = pd.read_parquet(parquet_path)
+            combined = pd.concat([existing, group_df], ignore_index=True)
+            combined = combined.drop_duplicates(subset=['日期']).sort_values('日期').reset_index(drop=True)
+            combined.to_parquet(parquet_path, index=False)
+        else:
+            group_df.to_parquet(parquet_path, index=False)
+
+    # Step 3: 更新 Company_Dim (新增股票，保留既有產業類別)
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    for code, name in new_stocks.items():
+        status = '上櫃' if code in otc_codes else '上市'
+        cursor.execute(
+            "UPDATE Company_Dim SET 證券名稱=?, 狀態=?, 更新時間=CURRENT_TIMESTAMP WHERE 證券代號=?",
+            (name, status, code)
+        )
+        if cursor.rowcount == 0:
+            cursor.execute(
+                "INSERT INTO Company_Dim (證券代號, 證券名稱, 狀態) VALUES (?, ?, ?)",
+                (code, name, status)
+            )
+    conn.commit()
+    conn.close()
+
+    # Step 4: 標記完成
+    mark_etl_done(valid_pending)
+
+    print(f"\n✅ 增量 ETL 完成，處理了 {len(valid_pending)} 個檔案 / {len(stock_groups)} 檔股票")
+
+
+def rebuild_main():
+    """完整重建：重新處理 staging 中所有 JSON 檔案"""
     twse_files = sorted([f for f in STAGING_DIR.glob("*.json") if not f.name.startswith("OTC_")])
     otc_files  = sorted([f for f in STAGING_DIR.glob("OTC_*.json")])
     all_files  = twse_files + otc_files
@@ -177,8 +327,7 @@ def main():
     print(f"開始處理 {len(twse_files)} 個上市 + {len(otc_files)} 個上櫃 JSON 檔案...")
     all_dfs = []
     otc_codes = set()
-    all_stocks_seen = {}  # code -> name (所有出現過的股票)
-    latest_day_df = None
+    all_stocks_seen = {}
 
     for file_path in tqdm(all_files, desc="讀取與清洗資料"):
         parsed = _parse_json_to_df(file_path)
@@ -188,29 +337,23 @@ def main():
         cleaned_df = clean_and_transform(df, date_str)
         all_dfs.append(cleaned_df)
 
-        # 收集所有出現過的股票
         for _, row in cleaned_df.iterrows():
             code = str(row['證券代號']).strip()
             name = str(row['證券名稱']).strip()
             all_stocks_seen[code] = name
 
-        # 累計 OTC 股票代號
         if file_path.name.startswith("OTC_"):
             codes = cleaned_df['證券代號'].astype(str).str.strip().unique()
             otc_codes.update(codes)
 
-        # 追蹤最新一天的資料 (用於 Company_Dim)
-        if latest_day_df is None or date_str > latest_day_df['日期'].iloc[0]:
-            latest_day_df = cleaned_df
-
-    # 用所有出現過的股票建立 Company_Dim (而非只用最新一天)
     if all_stocks_seen:
         all_stocks_df = pd.DataFrame([
             {'證券代號': k, '證券名稱': v} for k, v in all_stocks_seen.items()
         ])
         init_sqlite_schema(all_stocks_df, otc_codes)
-    elif latest_day_df is not None:
-        init_sqlite_schema(latest_day_df, otc_codes)
+    else:
+        print("⚠️  沒有讀取到任何股票資料")
+        return
 
     print("\n資料清洗完成，正在合併所有資料...")
     master_df = pd.concat(all_dfs, ignore_index=True)
@@ -225,7 +368,27 @@ def main():
         group_df = group_df.sort_values(by='日期').reset_index(drop=True)
         group_df.to_parquet(PARQUET_DIR / f"{clean_id}.parquet", index=False)
 
-    print("\n✅ ETL 流程與資料庫建置大功告成！")
+    # 重建後所有檔案都標記完成
+    init_etl_status()
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE ETL_Status SET 狀態='done', 更新時間=CURRENT_TIMESTAMP")
+    conn.commit()
+    conn.close()
+
+    print("\n✅ ETL 完整重建大功告成！")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="ETL 清洗與資料庫建置")
+    parser.add_argument('--rebuild', action='store_true', help='完整重建（重新處理所有檔案）')
+    args, _ = parser.parse_known_args()
+
+    if args.rebuild:
+        rebuild_main()
+    else:
+        incremental_main()
+
 
 if __name__ == "__main__":
     main()
