@@ -353,6 +353,79 @@ elif page == "📈 單檔分析":
         
         st.plotly_chart(fig, use_container_width=True)
         
+        # 營收趨勢圖
+        st.subheader("💰 營收趨勢圖")
+        
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            revenue_data = data_query.get_revenue_history(stock_id, limit=24)
+        
+        with col2:
+            if not revenue_data.empty:
+                st.caption(f"營收資料：{len(revenue_data)} 個月")
+            else:
+                st.info("此股票尚未有營收資料 (需執行 step3_fundamentals.py 抓取營收)")
+        
+        if not revenue_data.empty:
+            # 處理營收資料
+            revenue_df = revenue_data.copy()
+            
+            # 計算營收成長率
+            if '當月營收' in revenue_df.columns:
+                revenue_df['營收成長率'] = revenue_df['當月營收'].pct_change() * 100
+            
+            # 建立圖表
+            fig_rev = go.Figure()
+            
+            if '當月營收' in revenue_df.columns:
+                fig_rev.add_trace(go.Bar(
+                    x=revenue_df['年月'],
+                    y=revenue_df['當月營收'],
+                    name='當月營收',
+                    marker_color='green'
+                ))
+            
+            if '當月累計營收' in revenue_df.columns:
+                fig_rev.add_trace(go.Scatter(
+                    x=revenue_df['年月'],
+                    y=revenue_df['當月累計營收'],
+                    name='累計營收',
+                    line=dict(color='blue', width=2)
+                ))
+            
+            # 添加成長率線
+            if '營收成長率' in revenue_df.columns:
+                fig_rev.add_trace(go.Scatter(
+                    x=revenue_df['年月'],
+                    y=revenue_df['營收成長率'],
+                    name='營收成長率',
+                    yaxis='y2',
+                    line=dict(color='red', width=1)
+                ))
+            
+            fig_rev.update_layout(
+                title=f"{stock_id} - {stock_info.get('證券名稱')} 營收趨勢",
+                yaxis=dict(title="營收 (千元)"),
+                yaxis2=dict(title="營收成長率 (%)", overlaying='y', side='right'),
+                template="plotly_white",
+                height=400,
+                hovermode='x unified'
+            )
+            
+            st.plotly_chart(fig_rev, use_container_width=True)
+            
+            # 顯示最新營收資訊
+            st.markdown("**最新營收資訊**")
+            latest_rev = revenue_df.iloc[-1]
+            st.metric("最新月份", latest_rev.get('年月', 'N/A'))
+            if '當月營收' in latest_rev.index:
+                st.metric("當月營收", f"{latest_rev['當月營收']:.0f} 千元")
+            if '月增率' in latest_rev.index:
+                st.metric("月增率", f"{latest_rev['月增率']:.2f}%")
+            if '年增率' in latest_rev.index:
+                st.metric("年增率", f"{latest_rev['年增率']:.2f}%")
+        
         # 技術指標
         st.subheader("📈 技術指標")
         
