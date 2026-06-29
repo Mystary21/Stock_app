@@ -163,10 +163,23 @@ page = st.sidebar.radio(
 
 st.sidebar.divider()
 st.sidebar.markdown("**系統狀態**")
-all_stocks = data_query.get_all_stocks()
-st.sidebar.metric("已載入股票", len(all_stocks))
-all_industries = data_query.get_all_industries()
-st.sidebar.metric("產業類別", len(all_industries))
+
+# 資料新鮮度
+freshness = data_query.get_data_freshness()
+if freshness['latest_date']:
+    st.sidebar.metric("最新資料", freshness['latest_date'])
+else:
+    st.sidebar.metric("最新資料", "⚠️ 無資料")
+
+st.sidebar.metric("股票", freshness['total_stocks'])
+st.sidebar.metric("產業", freshness['total_industries'])
+
+# 待抓取
+pending = data_query.get_pending_fetch_count()
+if pending > 0:
+    st.sidebar.warning(f"待抓取 {pending} 天資料")
+else:
+    st.sidebar.success("✅ 所有資料已抓取完畢")
 
 # ============================================================================
 # 首頁

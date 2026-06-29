@@ -18,6 +18,96 @@ PARQUET_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ═══════════════════════════════════════════════
+#  資料品質校驗
+# ═══════════════════════════════════════════════
+
+def validate_and_clean(df, date_str):
+    """
+    資料品質校驗 + 清洗。
+
+    校驗項目：
+    1. 去除 NaN / 空值行
+    2. 去除異常值 (價格 < 0 或 超過 100,000)
+    3. 去除重複代號
+    4. 確保日期格式正確
+
+    Returns:
+        (DataFrame, warnings_list)
+    """
+    warnings = []
+    
+    # 1. 去除 NaN / 空值行
+    before = len(df)
+    df = df.dropna(subset=['證券代號']).reset_index(drop=True)
+    dropped_nan = before - len(df)
+    if dropped_nan > 0:
+        warnings.append(f"去除 {dropped_nan} 行 NaN/空值")
+    
+    # 2. 去除異常值
+    # 價格異常：收盤價 < 0 或 > 100,000
+    price_cols = ['收盤價', '開盤價', '最高價', '最低價']
+    for col in price_cols:
+        if col in df.columns:
+            before = len(df)
+            df = df[(df[col] >= 0) & (df[col] <= 100000)].copy()
+            dropped = before - len(df)
+            if dropped > 0:
+                warnings.append(f"{col}: 去除 {dropped} 行異常值 (<0 或 >100,000)")
+    
+    # 成交量異常：股數 < 0
+    if '成交股數' in df.columns:
+        before = len(df)
+        df = df[df['成交股數'] >= 0].copy()
+        dropped = before - len(df)
+        if dropped > 0:
+            warnings.append(f"成交股數: 去除 {dropped} 行異常值 (<0)")
+    
+    # 成交金額異常：金額 < 0
+    if '成交金額' in df.columns:
+        before = len(df)
+        df = df[df['成交金額'] >= 0].copy()
+        dropped = before - len(df)
+        if dropped > 0:
+            warnings.append(f"成交金額: 去除 {dropped} 行異常值 (<0)")
+    
+    # 3. 去除重複代號 (同一個日期同一個代號只保留一條)
+    before = len(df)
+    df = df.drop_duplicates(subset=['證券代號', '日期']).reset_index(drop=True)
+    dupes = before - len(df)
+    if dupes > 0:
+        warnings.append(f"去除 {dupes} 行重複代號")
+    
+    # 4. 日期格式校驗
+    if '日期' in df.columns:
+        bad_dates = len(df[df['日期'] != date_str])
+        if bad_dates > 0:
+            warnings.append(f"{bad_dates} 行日期格式不匹配 (預期 {date_str})")
+    
+    # 5. 補空值 (缺失的欄位補 0 或 None)
+    numeric_cols = ['成交股數', '成交筆數', '成交金額', '開盤價', '最高價', '最低價', 
+                    '收盤價', '漲跌', '本益比']
+    for col in numeric_cols:
+        if col in df.columns:
+            before = len(df)
+            df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', '').str.strip(), 
+                                    errors='coerce').fillna(0.0)
+            missing = before - len(df)
+            if missing > 0:
+                warnings.append(f"{col}: 補 {missing} 個 0")
+    
+    # 確保所有必要欄位存在
+    target_columns = [
+        '日期', '證券代號', '證券名稱', '成交股數', '成交筆數', '成交金額',
+        '開盤價', '最高價', '最低價', '收盤價', '漲跌', '本益比'
+    ]
+    for col in target_columns:
+        if col not in df.columns:
+            df[col] = None
+    
+    return df[target_columns], warnings
+
+
+# ═══════════════════════════════════════════════
 #  ETL 狀態追蹤 (增量處理核心)
 # ═══════════════════════════════════════════════
 
@@ -31,6 +121,7 @@ def init_etl_status():
             日期 TEXT,
             市場 TEXT,
             狀態 TEXT DEFAULT 'pending',
+            驗證狀態 TEXT DEFAULT 'pending',
             更新時間 TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
@@ -45,11 +136,36 @@ def init_etl_status():
             continue
         date_str = f"{raw[:4]}-{raw[4:6]}-{raw[6:8]}"
         cursor.execute('''
-            INSERT OR IGNORE INTO ETL_Status (檔案名稱, 日期, 市場, 狀態)
-            VALUES (?, ?, ?, 'pending')
+            INSERT OR IGNORE INTO ETL_Status (檔案名稱, 日期, 市場, 狀態, 驗證狀態)
+            VALUES (?, ?, ?, 'pending', 'pending')
         ''', (fname, date_str, market))
     conn.commit()
     conn.close()
+
+
+def mark_validation_done(filename, success: bool):
+    """將檔案的驗證狀態標記為完成"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    status = 'valid' if success else 'invalid'
+    cursor.execute(
+        "UPDATE ETL_Status SET 驗證狀態=?, 更新時間=CURRENT_TIMESTAMP WHERE 檔案名稱=?",
+        (status, filename)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_data_freshness():
+    """取得最新的有效資料日期"""
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT MAX(日期) FROM ETL_Status WHERE 驗證狀態='valid'"
+    )
+    row = cursor.fetchone()
+    conn.close()
+    return row[0] if row else None
 
 
 def get_pending_files():
@@ -75,46 +191,12 @@ def mark_etl_done(filenames):
     conn.close()
 
 def clean_and_transform(df, date_str):
-    """資料清洗與轉換核心邏輯"""
-    # 1. 補上日期欄位
-    df['日期'] = date_str
-    
-    # 2. 清理 HTML 標籤萃取漲跌符號
-    # 說明：將 <p style= color:red>+</p> 變成 +。如果是 X (表示平盤) 或是空白，則替換為空字串
-    if '漲跌(+/-)' in df.columns:
-        df['漲跌(+/-)'] = df['漲跌(+/-)'].astype(str).str.replace(r'<[^>]+>', '', regex=True).str.strip()
-        df['漲跌(+/-)'] = df['漲跌(+/-)'].replace({'X': '', ' ': ''})
-    else:
-        df['漲跌(+/-)'] = ''
-
-    # 3. 合併正負號與價差
-    if '漲跌價差' in df.columns:
-        # 去除原始價差可能的逗號與空白
-        price_diff = df['漲跌價差'].astype(str).str.replace(',', '').str.strip()
-        # 組合出例如 "+1.50" 或 "-0.50"
-        combined_change = df['漲跌(+/-)'] + price_diff
-        df['漲跌'] = pd.to_numeric(combined_change, errors='coerce').fillna(0.0)
-    else:
-        df['漲跌'] = 0.0
-
-    # 4. 清洗數值欄位並轉型
-    numeric_cols = ['成交股數', '成交筆數', '成交金額', '開盤價', '最高價', '最低價', '收盤價', '本益比']
-    for col in numeric_cols:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', '').str.strip(), errors='coerce')
-
-    # 5. 篩選我們最終需要的 11 個欄位 (注意：我們同時把證券名稱留著，稍後要塞進 SQLite，存 Parquet 時會丟掉)
-    target_columns = [
-        '日期', '證券代號', '證券名稱', '成交股數', '成交筆數', '成交金額', 
-        '開盤價', '最高價', '最低價', '收盤價', '漲跌', '本益比'
-    ]
-    
-    # 確保欄位存在，若不存在則補上空值
-    for col in target_columns:
-        if col not in df.columns:
-            df[col] = None
-            
-    return df[target_columns]
+    """資料清洗與轉換核心邏輯（整合 validate_and_clean）"""
+    warnings, df_cleaned = validate_and_clean(df, date_str)
+    if warnings:
+        for w in warnings:
+            print(f"  [⚠️] {w}")
+    return df_cleaned
 
 def init_sqlite_schema(latest_companies_df, otc_codes: set = None):
     """建置關聯式資料庫 (Star Schema)"""
@@ -272,6 +354,12 @@ def incremental_main():
         return
 
     # Step 2: 按股票分組，附加到 parquet
+    # 記錄驗證結果
+    all_valid = True
+    for fname in valid_pending:
+        success = all_valid  # 只要有任何一個檔案校驗失敗，就標記為 invalid
+        mark_validation_done(fname, success)
+
     new_df = pd.concat(all_new_data, ignore_index=True)
     new_df_no_name = new_df.drop(columns=['證券名稱', '_source_file'])
     stock_groups = list(new_df_no_name.groupby('證券代號'))
@@ -354,6 +442,19 @@ def rebuild_main():
     else:
         print("⚠️  沒有讀取到任何股票資料")
         return
+
+    # 記錄驗證結果
+    for file_path in all_files:
+        success = True  # 重建模式下假設全部有效
+        fname = file_path.name
+        if fname.startswith("OTC_"):
+            market, raw = 'TPEx', fname.replace('OTC_', '').replace('.json', '')
+        else:
+            market, raw = 'TWSE', fname.replace('.json', '')
+        if len(raw) != 8:
+            continue
+        date_str = f"{raw[:4]}-{raw[4:6]}-{raw[6:8]}"
+        mark_validation_done(fname, True)
 
     print("\n資料清洗完成，正在合併所有資料...")
     master_df = pd.concat(all_dfs, ignore_index=True)

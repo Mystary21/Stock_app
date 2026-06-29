@@ -465,6 +465,76 @@ class StockDataQuery:
         conn.close()
         return df
 
+    # ================== 系統狀態 ==================
+
+    def get_data_freshness(self) -> dict:
+        """
+        取得資料新鮮度資訊。
+
+        Returns:
+            dict:
+                latest_date: 最新有效資料日期 (YYYY-MM-DD)
+                total_stocks: 總股票數
+                total_industries: 總產業數
+                latest_update_time: 最新更新時間
+        """
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+
+            # 最新有效資料日期
+            cursor.execute(
+                "SELECT MAX(日期) FROM ETL_Status WHERE 驗證狀態='valid'"
+            )
+            latest_date = cursor.fetchone()[0]
+
+            # 總股票數
+            cursor.execute(
+                "SELECT COUNT(*) FROM Company_Dim"
+            )
+            total_stocks = cursor.fetchone()[0]
+
+            # 總產業數
+            cursor.execute(
+                "SELECT COUNT(DISTINCT 產業類別) FROM Company_Dim WHERE 產業類別 IS NOT NULL"
+            )
+            total_industries = cursor.fetchone()[0]
+
+            # 最新更新時間
+            cursor.execute(
+                "SELECT MAX(更新時間) FROM ETL_Status WHERE 驗證狀態='valid'"
+            )
+            latest_update_time = cursor.fetchone()[0]
+
+            conn.close()
+            return {
+                'latest_date': latest_date,
+                'total_stocks': total_stocks,
+                'total_industries': total_industries,
+                'latest_update_time': latest_update_time,
+            }
+        except Exception:
+            return {
+                'latest_date': None,
+                'total_stocks': 0,
+                'total_industries': 0,
+                'latest_update_time': None,
+            }
+
+    def get_pending_fetch_count(self) -> int:
+        """取得待抓取的日期數量"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT COUNT(*) FROM fetch_status WHERE status IN ('pending', 'error')"
+            )
+            count = cursor.fetchone()[0]
+            conn.close()
+            return count
+        except Exception:
+            return 0
+
 
 # 創建全局實例
 data_query = StockDataQuery()
