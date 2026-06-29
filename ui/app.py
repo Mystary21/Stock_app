@@ -154,6 +154,7 @@ page = st.sidebar.radio(
     [
         "🏠 首頁",
         "📈 單檔分析",
+        "📊 多股對照",
         "🏢 族群比較",
         "🏷️ 族群分析",
         "🔍 選股篩選",
@@ -586,6 +587,145 @@ elif page == "📈 單檔分析":
         summary_df.columns = ['值']
         
         st.dataframe(summary_df, use_container_width=True)
+
+# ============================================================================
+# 多股對照頁面
+# ============================================================================
+
+elif page == "📊 多股對照":
+    st.title("📊 多股對照分析")
+    
+    st.caption("選擇多檔股票進行基本面與技術指標對照分析")
+    
+    # 股票選擇
+    st.markdown("**選擇回測股票**")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        stock1 = searchable_stock_select("股票 1", "compare_stock1")
+    
+    with col2:
+        stock2 = searchable_stock_select("股票 2", "compare_stock2")
+    
+    with col3:
+        stock3 = searchable_stock_select("股票 3", "compare_stock3")
+    
+    # 收集股票
+    selected_stocks = []
+    if stock1:
+        selected_stocks.append(stock1)
+    if stock2:
+        selected_stocks.append(stock2)
+    if stock3:
+        selected_stocks.append(stock3)
+    
+    if not selected_stocks:
+        st.warning("請至少選擇一檔股票")
+    elif len(selected_stocks) < 2:
+        st.info("建議至少選擇 2 檔股票進行對照")
+    
+    if st.button("開始對照分析", type="primary", disabled=len(selected_stocks) < 2):
+        with st.spinner("分析中..."):
+            try:
+                # 取得每檔股票的資料
+                stock_data = {}
+                for stock_id in selected_stocks:
+                    info = data_query.get_stock_by_id(stock_id)
+                    latest_price = data_query.get_latest_price(stock_id)
+                    
+                    if info and latest_price:
+                        stock_data[stock_id] = {
+                            'info': info,
+                            'latest_price': latest_price,
+                        }
+                
+                if len(stock_data) < 2:
+                    st.warning("請至少選擇 2 檔有資料的股票")
+                else:
+                    # 顯示對照表
+                    st.success(f"已分析 {len(stock_data)} 檔股票")
+                    
+                    # 基本資訊對照
+                    st.subheader("📋 基本資訊對照")
+                    
+                    cols = st.columns(len(stock_data))
+                    for i, (stock_id, data) in enumerate(stock_data.items()):
+                        with cols[i]:
+                            st.markdown(f"**{stock_id}** {data['info'].get('證券名稱')}")
+                            st.metric("收盤價", f"${data['latest_price'].get('收盤價', 0):.2f}")
+                            st.metric("漲跌", f"{data['latest_price'].get('漲跌', 0):.2f}")
+                            st.caption(f"產業：{data['info'].get('產業類別', 'N/A')}")
+                    
+                    # 技術指標對照
+                    st.subheader("📈 技術指標對照")
+                    
+                    # 計算每檔股票的技術指標
+                    indicators_data = {}
+                    for stock_id in selected_stocks:
+                        analyzer = StockAnalyzer(stock_id)
+                        indicators = analyzer.get_latest_indicators()
+                        indicators_data[stock_id] = indicators
+                    
+                    # 顯示對照表
+                    compare_cols = st.columns(len(stock_data))
+                    
+                    for i, stock_id in enumerate(selected_stocks):
+                        with compare_cols[i]:
+                            st.markdown(f"**{stock_id}**")
+                            indicators = indicators_data[stock_id]
+                            
+                            st.metric("RSI (14)", f"{indicators.get('RSI_14', 'N/A')}")
+                            st.metric("MACD", f"{indicators.get('MACD', 'N/A')}")
+                            st.metric("SMA 20", f"{indicators.get('SMA_20', 'N/A')}")
+                            st.metric("SMA 50", f"{indicators.get('SMA_50', 'N/A')}")
+                            
+                            # 訊號
+                            rsi_val = indicators.get('RSI_14')
+                            if rsi_val is not None:
+                                if rsi_val >= 70:
+                                    st.warning("🔴 超買")
+                                elif rsi_val <= 30:
+                                    st.success("🟢 超賣")
+                                else:
+                                    st.caption("🟡 中性")
+                    
+                    # K線圖對照
+                    st.subheader("📊 K線圖對照")
+                    
+                    fig = go.Figure()
+                    
+                    for i, stock_id in enumerate(selected_stocks):
+                        analyzer = StockAnalyzer(stock_id)
+                        df = analyzer.df
+                        
+                        # 過濾最近 30 天
+                        if len(df) > 30:
+                            df = df.tail(30)
+                        
+                        fig.add_trace(go.Candlestick(
+                            x=df['日期'],
+                            open=df['開盤價'],
+                            high=df['最高價'],
+                            low=df['最低價'],
+                            close=df['收盤價'],
+                            name=f"{stock_id}",
+                            increasing_line_color='green',
+                            decreasing_line_color='red'
+                        ))
+                    
+                    fig.update_layout(
+                        title="多股 K線對照",
+                        yaxis_title="價格",
+                        xaxis_title="日期",
+                        template="plotly_white",
+                        height=500,
+                        hovermode='x unified'
+                    )
+                    
+                    st.plotly_chart(fig, use_container_width=True)
+                
+            except Exception as e:
+                st.error(f"分析失敗：{str(e)}")
 
 # ============================================================================
 # 族群比較頁面
