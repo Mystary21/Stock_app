@@ -32,6 +32,27 @@ def searchable_stock_select(label: str, key: str, all_stocks_df=None, separator:
     selected = st.selectbox(label, filtered, key=f"sel_{key}")
     return options[selected]
 
+def searchable_multi_stock_select(label: str, key: str, all_stocks_df=None, separator: str = " - "):
+    """顯示多個含文字搜尋的股票下拉選單，回傳 股票代號列表"""
+    if all_stocks_df is None:
+        all_stocks_df = data_query.get_all_stocks()
+    options = {f"{row['證券代號']}{separator}{row['證券名稱']}": row['證券代號']
+               for _, row in all_stocks_df.iterrows()}
+    option_list = list(options.keys())
+
+    selected = []
+    for i in range(3):
+        search = st.text_input(f"🔍 {label} ({i+1})", key=f"srch_{key}_{i}", placeholder=f"輸入代號或名稱搜尋後選取")
+        filtered = [o for o in option_list if not search or search.upper() in o.upper()]
+        if not filtered:
+            st.warning(f"無符合「{search}」的股票")
+        else:
+            selected_opt = st.selectbox(label, filtered, key=f"sel_{key}_{i}")
+            if selected_opt:
+                selected.append(options[selected_opt])
+
+    return selected
+
 # ============================================================================
 # Streamlit 頁面配置
 # ============================================================================
@@ -599,25 +620,13 @@ elif page == "📊 多股對照":
     
     # 股票選擇
     st.markdown("**選擇回測股票**")
-    col1, col2, col3 = st.columns(3)
     
-    with col1:
-        stock1 = searchable_stock_select("股票 1", "compare_stock1")
+    selected_stocks = searchable_multi_stock_select("選擇對照股票", "compare_stocks")
     
-    with col2:
-        stock2 = searchable_stock_select("股票 2", "compare_stock2")
-    
-    with col3:
-        stock3 = searchable_stock_select("股票 3", "compare_stock3")
-    
-    # 收集股票
-    selected_stocks = []
-    if stock1:
-        selected_stocks.append(stock1)
-    if stock2:
-        selected_stocks.append(stock2)
-    if stock3:
-        selected_stocks.append(stock3)
+    if not selected_stocks:
+        st.warning("請至少選擇一檔股票")
+    elif len(selected_stocks) < 2:
+        st.info("建議至少選擇 2 檔股票進行對照")
     
     if not selected_stocks:
         st.warning("請至少選擇一檔股票")
@@ -649,12 +658,14 @@ elif page == "📊 多股對照":
                     st.subheader("📋 基本資訊對照")
                     
                     cols = st.columns(len(stock_data))
-                    for i, (stock_id, data) in enumerate(stock_data.items()):
-                        with cols[i]:
-                            st.markdown(f"**{stock_id}** {data['info'].get('證券名稱')}")
-                            st.metric("收盤價", f"${data['latest_price'].get('收盤價', 0):.2f}")
-                            st.metric("漲跌", f"{data['latest_price'].get('漲跌', 0):.2f}")
-                            st.caption(f"產業：{data['info'].get('產業類別', 'N/A')}")
+                    for i, stock_id in enumerate(selected_stocks):
+                        if stock_id in stock_data:
+                            with cols[i]:
+                                data = stock_data[stock_id]
+                                st.markdown(f"**{stock_id}** {data['info'].get('證券名稱')}")
+                                st.metric("收盤價", f"${data['latest_price'].get('收盤價', 0):.2f}")
+                                st.metric("漲跌", f"{data['latest_price'].get('漲跌', 0):.2f}")
+                                st.caption(f"產業：{data['info'].get('產業類別', 'N/A')}")
                     
                     # 技術指標對照
                     st.subheader("📈 技術指標對照")
@@ -662,56 +673,59 @@ elif page == "📊 多股對照":
                     # 計算每檔股票的技術指標
                     indicators_data = {}
                     for stock_id in selected_stocks:
-                        analyzer = StockAnalyzer(stock_id)
-                        indicators = analyzer.get_latest_indicators()
-                        indicators_data[stock_id] = indicators
+                        if stock_id in stock_data:
+                            analyzer = StockAnalyzer(stock_id)
+                            indicators = analyzer.get_latest_indicators()
+                            indicators_data[stock_id] = indicators
                     
                     # 顯示對照表
-                    compare_cols = st.columns(len(stock_data))
+                    compare_cols = st.columns(len(selected_stocks))
                     
                     for i, stock_id in enumerate(selected_stocks):
-                        with compare_cols[i]:
-                            st.markdown(f"**{stock_id}**")
-                            indicators = indicators_data[stock_id]
-                            
-                            st.metric("RSI (14)", f"{indicators.get('RSI_14', 'N/A')}")
-                            st.metric("MACD", f"{indicators.get('MACD', 'N/A')}")
-                            st.metric("SMA 20", f"{indicators.get('SMA_20', 'N/A')}")
-                            st.metric("SMA 50", f"{indicators.get('SMA_50', 'N/A')}")
-                            
-                            # 訊號
-                            rsi_val = indicators.get('RSI_14')
-                            if rsi_val is not None:
-                                if rsi_val >= 70:
-                                    st.warning("🔴 超買")
-                                elif rsi_val <= 30:
-                                    st.success("🟢 超賣")
-                                else:
-                                    st.caption("🟡 中性")
+                        if stock_id in indicators_data:
+                            with compare_cols[i]:
+                                st.markdown(f"**{stock_id}**")
+                                indicators = indicators_data[stock_id]
+                                
+                                st.metric("RSI (14)", f"{indicators.get('RSI_14', 'N/A')}")
+                                st.metric("MACD", f"{indicators.get('MACD', 'N/A')}")
+                                st.metric("SMA 20", f"{indicators.get('SMA_20', 'N/A')}")
+                                st.metric("SMA 50", f"{indicators.get('SMA_50', 'N/A')}")
+                                
+                                # 訊號
+                                rsi_val = indicators.get('RSI_14')
+                                if rsi_val is not None:
+                                    if rsi_val >= 70:
+                                        st.warning("🔴 超買")
+                                    elif rsi_val <= 30:
+                                        st.success("🟢 超賣")
+                                    else:
+                                        st.caption("🟡 中性")
                     
                     # K線圖對照
                     st.subheader("📊 K線圖對照")
                     
                     fig = go.Figure()
                     
-                    for i, stock_id in enumerate(selected_stocks):
-                        analyzer = StockAnalyzer(stock_id)
-                        df = analyzer.df
-                        
-                        # 過濾最近 30 天
-                        if len(df) > 30:
-                            df = df.tail(30)
-                        
-                        fig.add_trace(go.Candlestick(
-                            x=df['日期'],
-                            open=df['開盤價'],
-                            high=df['最高價'],
-                            low=df['最低價'],
-                            close=df['收盤價'],
-                            name=f"{stock_id}",
-                            increasing_line_color='green',
-                            decreasing_line_color='red'
-                        ))
+                    for stock_id in selected_stocks:
+                        if stock_id in stock_data:
+                            analyzer = StockAnalyzer(stock_id)
+                            df = analyzer.df
+                            
+                            # 過濾最近 30 天
+                            if len(df) > 30:
+                                df = df.tail(30)
+                            
+                            fig.add_trace(go.Candlestick(
+                                x=df['日期'],
+                                open=df['開盤價'],
+                                high=df['最高價'],
+                                low=df['最低價'],
+                                close=df['收盤價'],
+                                name=f"{stock_id}",
+                                increasing_line_color='green',
+                                decreasing_line_color='red'
+                            ))
                     
                     fig.update_layout(
                         title="多股 K線對照",
