@@ -97,6 +97,110 @@ class StockFilter:
             return True
         
         self.add_condition(condition, f"RSI: {min_rsi}-{max_rsi}")
+    
+    def filter_by_pe_ratio(self, min_pe: float = None, max_pe: float = None) -> 'StockFilter':
+        """按 P/E 比率篩選"""
+        def condition(stock_id):
+            try:
+                fundamentals = data_query.get_fundamentals(stock_id)
+                if fundamentals.empty:
+                    return False
+                pe = fundamentals.iloc[0].get('P/E', None)
+                if pe is None:
+                    return False
+                if min_pe is not None and pe < min_pe:
+                    return False
+                if max_pe is not None and pe > max_pe:
+                    return False
+                return True
+            except:
+                return False
+        
+        self.add_condition(condition, f"P/E: {min_pe}-{max_pe}")
+        return self
+    
+    def filter_by_roe(self, min_roe: float = None, max_roe: float = None) -> 'StockFilter':
+        """按 ROE 篩選"""
+        def condition(stock_id):
+            try:
+                fundamentals = data_query.get_fundamentals(stock_id)
+                if fundamentals.empty:
+                    return False
+                roe = fundamentals.iloc[0].get('ROE(%)', None)
+                if roe is None:
+                    return False
+                if min_roe is not None and roe < min_roe:
+                    return False
+                if max_roe is not None and roe > max_roe:
+                    return False
+                return True
+            except:
+                return False
+        
+        self.add_condition(condition, f"ROE: {min_roe}-{max_roe}")
+        return self
+    
+    def filter_by_market_cap(self, min_cap: float = None, max_cap: float = None) -> 'StockFilter':
+        """按市值篩選"""
+        def condition(stock_id):
+            try:
+                fundamentals = data_query.get_fundamentals(stock_id)
+                if fundamentals.empty:
+                    return False
+                bps = fundamentals.iloc[0].get('BPS', None)
+                latest_price = data_query.get_latest_price(stock_id)
+                if bps is None or latest_price is None:
+                    return False
+                market_cap = latest_price['收盤價'] * bps
+                if min_cap is not None and market_cap < min_cap:
+                    return False
+                if max_cap is not None and market_cap > max_cap:
+                    return False
+                return True
+            except:
+                return False
+        
+        self.add_condition(condition, f"Market Cap: {min_cap}-{max_cap}")
+        return self
+    
+    def filter_by_dividend_yield(self, min_yield: float = None, max_yield: float = None) -> 'StockFilter':
+        """按殖利率篩選"""
+        def condition(stock_id):
+            try:
+                fundamentals = data_query.get_fundamentals(stock_id)
+                if fundamentals.empty:
+                    return False
+                pe = fundamentals.iloc[0].get('P/E', None)
+                if pe is None:
+                    return False
+                # 簡易殖利率估算
+                dividend_yield = 100 / pe if pe > 0 else 0
+                if min_yield is not None and dividend_yield < min_yield:
+                    return False
+                if max_yield is not None and dividend_yield > max_yield:
+                    return False
+                return True
+            except:
+                return False
+        
+        self.add_condition(condition, f"Dividend Yield: {min_yield}-{max_yield}")
+        return self
+    
+    def filter_with_batch(self, stock_ids: List[str]) -> List[str]:
+        """批量篩選 - 一次性篩選所有股票"""
+        if not self.conditions:
+            return stock_ids
+        
+        results = []
+        for stock_id in stock_ids:
+            try:
+                matches = all(cond_func(stock_id) for cond_func, _ in self.conditions)
+                if matches:
+                    results.append(stock_id)
+            except:
+                continue
+        
+        return results
         return self
     
     def filter_by_moving_average_cross(self) -> 'StockFilter':

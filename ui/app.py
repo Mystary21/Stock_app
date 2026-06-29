@@ -1033,10 +1033,11 @@ elif page == "🔍 選股篩選":
                         # 複製所有條件
                         for cond, _ in filter_obj.conditions:
                             industry_filter.conditions.append(cond)
-                        all_results.append(industry_filter.execute())
-                    result = pd.concat(all_results, ignore_index=True).drop_duplicates()
+                        all_results.append(industry_filter.filter_with_batch(data_query.get_all_stocks()['證券代號'].tolist()))
+                    result = pd.DataFrame({'證券代號': [s for group in all_results for s in group]})
+                    result = result.drop_duplicates()
                 else:
-                    result = filter_obj.execute()
+                    result = pd.DataFrame({'證券代號': filter_obj.filter_with_batch(data_query.get_all_stocks()['證券代號'].tolist())})
                 
                 st.success(f"找到 {len(result)} 檔符合條件的股票")
                 
