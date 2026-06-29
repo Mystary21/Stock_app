@@ -391,10 +391,14 @@ class StrategyLibrary:
     @staticmethod
     def sma_crossover_strategy(df: pd.DataFrame, current_idx: int) -> Dict:
         """
-        簡單移動平均線交叉策略
+        簡單移動平均線交叉策略（修正版）
         
-        買進信號：SMA20 > SMA50
-        賣出信號：SMA20 < SMA50
+        買進信號：SMA20 上穿 SMA50（黃金交叉）
+        賣出信號：SMA20 下穿 SMA50（死叉）
+        
+        修正邏輯：
+        - 只在 SMA20 從低於 SMA50 轉變為高於 SMA50 時產生買進信號
+        - 只在 SMA20 從高於 SMA50 轉變為低於 SMA50 時產生賣出信號
         """
         if current_idx < 50:  # 需要足夠的數據計算 SMA50
             return {'action': 'HOLD', 'confidence': 0}
@@ -406,12 +410,27 @@ class StrategyLibrary:
         if pd.isna(sma_20) or pd.isna(sma_50):
             return {'action': 'HOLD', 'confidence': 0}
         
-        if sma_20 > sma_50:
-            return {'action': 'BUY', 'confidence': 0.7}
-        elif sma_20 < sma_50:
-            return {'action': 'SELL', 'confidence': 0.7}
-        else:
+        # 取得前一個日的 SMA 值
+        prev_idx = current_idx - 1
+        if prev_idx < 0 or prev_idx >= len(df):
             return {'action': 'HOLD', 'confidence': 0}
+        
+        prev_row = df.iloc[prev_idx]
+        prev_sma_20 = prev_row.get('SMA_20')
+        prev_sma_50 = prev_row.get('SMA_50')
+        
+        if pd.isna(prev_sma_20) or pd.isna(prev_sma_50):
+            return {'action': 'HOLD', 'confidence': 0}
+        
+        # 黃金交叉：SMA20 從低於 SMA50 轉變為高於 SMA50
+        if sma_20 > sma_50 and prev_sma_20 <= prev_sma_50:
+            return {'action': 'BUY', 'confidence': 0.8}
+        
+        # 死叉：SMA20 從高於 SMA50 轉變為低於 SMA50
+        if sma_20 < sma_50 and prev_sma_20 >= prev_sma_50:
+            return {'action': 'SELL', 'confidence': 0.8}
+        
+        return {'action': 'HOLD', 'confidence': 0}
     
     @staticmethod
     def rsi_strategy(df: pd.DataFrame, current_idx: int) -> Dict:
