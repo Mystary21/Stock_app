@@ -450,6 +450,60 @@ elif page == "📈 單檔分析":
                 st.markdown(f"**訊號**: {vol_signal(vol_val)}")
                 st.caption("以近20日日報酬率的標準差衡量股價波動程度。波動率越高，代表價格起伏越大，持有風險相對越高。")
         
+        # 基本面分析
+        st.divider()
+        st.subheader("📊 基本面分析")
+        
+        fundamentals = data_query.get_fundamentals(stock_id)
+        if fundamentals:
+            def fmt_basic(val):
+                """格式化基本面數值"""
+                if val is None:
+                    return "N/A"
+                if isinstance(val, float) and val >= 0:
+                    return f"{val:.2f}"
+                if isinstance(val, float) and val < 0:
+                    return f"{val:.2f}"
+                return f"{val}"
+            
+            def fmt_pct(val):
+                """格式化百分比"""
+                if val is None:
+                    return "N/A"
+                return f"{val:.2f}%"
+            
+            c1, c2, c3, c4, c5 = st.columns(5)
+            
+            with c1:
+                st.metric("本益比 (P/E)", fmt_basic(fundamentals.get('pe_ratio')))
+            with c2:
+                st.metric("市帳率 (P/B)", fmt_basic(fundamentals.get('pb_ratio')))
+            with c3:
+                st.metric("ROE", fmt_pct(fundamentals.get('roe')))
+            with c4:
+                st.metric("ROA", fmt_pct(fundamentals.get('roa')))
+            with c5:
+                st.metric("淨利率", fmt_pct(fundamentals.get('net_margin')))
+            
+            st.divider()
+            
+            c1, c2, c3, c4 = st.columns(4)
+            
+            with c1:
+                st.metric("負債比", fmt_pct(fundamentals.get('debt_ratio')))
+            with c2:
+                st.metric("毛利率", fmt_pct(fundamentals.get('gross_margin')))
+            with c3:
+                st.metric("EPS", fmt_basic(fundamentals.get('eps')))
+            with c4:
+                st.metric("BPS", fmt_basic(fundamentals.get('bps')))
+            
+            st.divider()
+            st.caption("基本面分析資料來源：MOPS 財務報表 + 最新收盤價。指標計算基於最近一個會計年度財務數據。")
+        
+        else:
+            st.info("⚠️ 尚未取得基本面資料，請先執行資料抓取")
+        
         # 分析摘要
         st.divider()
         st.subheader("📋 分析摘要")

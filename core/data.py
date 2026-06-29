@@ -151,6 +151,81 @@ class StockDataQuery:
             '成交金額': latest['成交金額'],
         }
     
+    # ================== 基本面分析 ==================
+    
+    def get_fundamentals(self, stock_id: str) -> Optional[dict]:
+        """
+        取得股票的基本面指標 (P/E, P/B, ROE, ROA 等)
+        
+        Args:
+            stock_id: 股票代號 (e.g., "2330")
+        
+        Returns:
+            dict: 基本面指標，或 None
+        """
+        try:
+            conn = self._get_connection()
+            try:
+                query = """
+                    SELECT 
+                        f.證券代號,
+                        c.證券名稱,
+                        f.pe_ratio,
+                        f.pb_ratio,
+                        f.roe,
+                        f.roa,
+                        f.debt_ratio,
+                        f.gross_margin,
+                        f.net_margin,
+                        f.eps,
+                        f.bps,
+                        f.close_price
+                    FROM Company_Dim c
+                    LEFT JOIN (
+                        SELECT 
+                            證券代號,
+                            pe_ratio,
+                            pb_ratio,
+                            roe,
+                            roa,
+                            debt_ratio,
+                            gross_margin,
+                            net_margin,
+                            eps,
+                            bps,
+                            close_price
+                        FROM Stock_Fact
+                        WHERE 證券代號 IN (SELECT 證券代號 FROM Company_Dim)
+                        ORDER BY 日期 DESC
+                        LIMIT 1
+                    ) f ON c.證券代號 = f.證券代號
+                    WHERE f.證券代號 = ?
+                """
+                df = pd.read_sql_query(query, conn, params=(stock_id,))
+            finally:
+                self._return_connection(conn)
+            
+            if df.empty:
+                return None
+            
+            row = df.iloc[0]
+            return {
+                '證券代號': row['證券代號'],
+                '證券名稱': row['證券名稱'],
+                'pe_ratio': row['pe_ratio'],
+                'pb_ratio': row['pb_ratio'],
+                'roe': row['roe'],
+                'roa': row['roa'],
+                'debt_ratio': row['debt_ratio'],
+                'gross_margin': row['gross_margin'],
+                'net_margin': row['net_margin'],
+                'eps': row['eps'],
+                'bps': row['bps'],
+                'close_price': row['close_price'],
+            }
+        except Exception:
+            return None
+    
     # ================== 批量查詢 ==================
     
     def get_multi_stock_prices(self, stock_ids: List[str], 

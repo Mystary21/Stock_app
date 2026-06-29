@@ -29,6 +29,12 @@
 │  │ - get_stocks_by_tag(), add_tag() ...                                │  │
 │  └─────────────────────────────────────────────────────────────────────┘  │
 │  ┌─────────────────────────────────────────────────────────────────────┐  │
+│  │ Fundamental Analysis Layer (core/fundamentals.py)                   │  │
+│  │ - FundamentalAnalyzer: 基本面分析器                                 │  │
+│  │ - calculate_metrics(): P/E, P/B, ROE, ROA, 負債比，毛利率，淨利率  │  │
+│  │ - get_all_stocks_metrics(): 批量取得所有股票基本面指標              │  │
+│  └─────────────────────────────────────────────────────────────────────┘  │
+│  ┌─────────────────────────────────────────────────────────────────────┐  │
 │  │ Data Access Layer (core/data.py)                                    │  │
 │  │ - StockDataQuery: 統一數據查詢 API (SQLite + Parquet 雙存儲)        │  │
 │  │ + core/database.py: SQLAlchemy engine (供 init_db.py 使用)          │  │
@@ -224,7 +230,9 @@ data_query.get_stock_price_history("2330")  → parquet_data/2330.parquet
     ↓
 TechnicalAnalysis.calculate_indicators()
     ↓
-Display: K 線圖 + 技術指標
+FundamentalAnalyzer.analyze("2330")  → P/E, P/B, ROE, ROA 等
+    ↓
+Display: K 線圖 + 技術指標 + 基本面分析
 ```
 
 ### 場景 2：用戶執行篩選
@@ -432,13 +440,14 @@ engine.add_signal(StrategyLibrary.new_strategy)
 1. **完整 OTC 歷史資料** ✅ 已完成（2539/2542 交易日，99.9%）
 2. **增量 ETL 流水線** ✅ 已完成
 3. **族群分析（標籤系統）** ✅ 已完成
-4. **即時數據**: WebSocket 連接 TWSE/TPEx 即時行情
-5. **高級指標**: 期貨指數、融資融券數據
-6. **機器學習**: 價格預測、異常檢測
-7. **投資組合**: 多檔資產配置、風險管理
-8. **API 服務**: REST API 供第三方調用
-9. **行動應用**: iOS/Android 應用
-10. **國際市場**: 美股/港股等其他交易所
+4. **基本面分析** ✅ 已完成（P/E, P/B, ROE, ROA, 負債比，毛利率，淨利率）
+5. **即時數據**: WebSocket 連接 TWSE/TPEx 即時行情
+6. **高級指標**: 期貨指數、融資融券數據
+7. **機器學習**: 價格預測、異常檢測
+8. **投資組合**: 多檔資產配置、風險管理
+9. **API 服務**: REST API 供第三方調用
+10. **行動應用**: iOS/Android 應用
+11. **國際市場**: 美股/港股等其他交易所
 
 ---
 

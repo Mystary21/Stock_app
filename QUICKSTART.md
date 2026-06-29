@@ -38,7 +38,7 @@ python main.py web --port 8503
 | 頁面 | 說明 |
 |------|------|
 | **首頁** | 市場概覽、漲跌榜（支援所有上市 + 上櫃股票） |
-| **單檔分析** | K 線圖、技術指標（RSI/MACD/布林帶） |
+| **單檔分析** | K 線圖、技術指標（RSI/MACD/布林帶）+ 基本面分析（P/E/P/B/ROE 等） |
 | **族群比較** | 產業績效統計、領頭股、漲跌排行、相關性 |
 | **族群分析** | 自訂標籤管理（建立/刪除/批次貼標） |
 | **選股篩選** | 預定義篩選 + 自訂多條件篩選 |
@@ -57,6 +57,23 @@ python main.py web --port 8503
   - 即時持久化（重整頁面不遺失）
   - 搜尋式股票選擇器（支援文字搜尋）
   - 全選 / 批次操作
+  - 涵蓋所有上市 + 上櫃股票
+```
+
+### 📊 基本面分析（新功能）
+
+在「單檔分析」頁面新增了基本面分析功能：
+
+```
+操作步驟:
+  1. 選擇股票代號（如 2330）
+  2. 頁面自動顯示基本面指標卡
+  3. 包含：本益比、市帳率、ROE、ROA、淨利率、負債比、毛利率、EPS、BPS
+
+特色:
+  - 自動計算（無需額外 API 呼叫）
+  - 即時顯示（選擇股票後立即更新）
+  - 資料來源：MOPS 財務報表 + 最新收盤價
   - 涵蓋所有上市 + 上櫃股票
 ```
 
@@ -218,7 +235,46 @@ auto_tag_all_companies()
 data_query.delete_tag("AI 概念股", "2330")
 ```
 
-### 5. 回測策略
+### 5. 基本面分析
+
+```python
+from core.data import data_query
+from core.themes import auto_tag_all_companies, get_stocks_by_tag
+
+# 建立標籤
+data_query.create_tag("AI 概念股", "2330")
+data_query.create_tag("AI 概念股", "2454")
+
+# 查詢標籤下的股票
+stocks = get_stocks_by_tag("AI 概念股")
+
+# 自動貼標（基於公司名稱關鍵字）
+auto_tag_all_companies()
+
+# 刪除標籤
+data_query.delete_tag("AI 概念股", "2330")
+```
+
+### 5. 基本面分析
+
+```python
+from core.data import data_query
+
+# 取得基本面指標
+fundamentals = data_query.get_fundamentals("2330")
+if fundamentals:
+    print(f"本益比：{fundamentals['pe_ratio']}")
+    print(f"市帳率：{fundamentals['pb_ratio']}")
+    print(f"ROE: {fundamentals['roe']}%")
+    print(f"ROA: {fundamentals['roa']}%")
+    print(f"淨利率：{fundamentals['net_margin']}%")
+    print(f"負債比：{fundamentals['debt_ratio']}%")
+    print(f"毛利率：{fundamentals['gross_margin']}%")
+    print(f"EPS: {fundamentals['eps']}")
+    print(f"BPS: {fundamentals['bps']}")
+```
+
+### 6. 回測策略
 
 ```python
 from backtesting.engine import BacktestEngine, StrategyLibrary
@@ -233,10 +289,10 @@ engine = BacktestEngine(
 engine.add_signal(StrategyLibrary.sma_crossover_strategy)
 results = engine.backtest()
 
-print(f"初始資本: ${results['初始資本']:,.0f}")
-print(f"最終價值: ${results['最終價值']:,.0f}")
-print(f"總報酬率: {results['總報酬率%']}%")
-print(f"勝率: {results['勝率%']}%")
+print(f"初始資本：${results['初始資本']:,.0f}")
+print(f"最終價值：${results['最終價值']:,.0f}")
+print(f"總報酬率：{results['總報酬率%']}%")
+print(f"勝率：{results['勝率%']}%")
 ```
 
 ---
@@ -253,6 +309,7 @@ data_query.get_stock_price_history("2330")
 data_query.get_latest_price("2330")
 data_query.get_stocks_by_industry("半導體")
 data_query.get_all_industries()
+data_query.get_fundamentals("2330")  # 基本面分析（P/E, P/B, ROE 等）
 data_query.create_tag("族群名", "股票代號")     # 新增標籤
 data_query.delete_tag("族群名", "股票代號")     # 刪除標籤
 ```
