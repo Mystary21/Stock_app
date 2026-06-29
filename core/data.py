@@ -4,6 +4,7 @@ import pandas as pd
 from pathlib import Path
 from typing import List, Tuple, Optional
 import numpy as np
+from contextlib import contextmanager
 
 # 設定路徑
 DB_PATH = "stock_warehouse.db"
@@ -15,27 +16,57 @@ class StockDataQuery:
     def __init__(self):
         self.db_path = DB_PATH
         self.parquet_dir = PARQUET_DIR
+        self._connection_pool = None
+    
+    def _get_connection_pool(self):
+        """Lazy 初始化連線池"""
+        if self._connection_pool is None:
+            self._connection_pool = sqlite3.ConnectionPool()
+            conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            self._connection_pool.register(conn)
+        return self._connection_pool
     
     def _get_connection(self):
-        """獲得 SQLite 連接"""
-        return sqlite3.connect(self.db_path)
+        """
+        獲得 SQLite 連接。
+        
+        若已建立連線池，則從池中取出；否則建立新連線。
+        """
+        pool = self._get_connection_pool()
+        try:
+            return pool.acquire()
+        except Exception:
+            # 連線池異常時回退到直接連線
+            return sqlite3.connect(self.db_path)
+    
+    def _return_connection(self, conn):
+        """將連線歸還連線池"""
+        pool = self._get_connection_pool()
+        try:
+            pool.release(conn)
+        except Exception:
+            pass  # 連線池異常時忽略
     
     # ================== 基礎查詢 ==================
     
     def get_all_stocks(self) -> pd.DataFrame:
         """取得所有股票的基本資訊"""
         conn = self._get_connection()
-        query = "SELECT 證券代號, 證券名稱, 產業類別, 狀態 FROM Company_Dim"
-        df = pd.read_sql_query(query, conn)
-        conn.close()
+        try:
+            query = "SELECT 證券代號, 證券名稱, 產業類別, 狀態 FROM Company_Dim"
+            df = pd.read_sql_query(query, conn)
+        finally:
+            self._return_connection(conn)
         return df
     
     def get_stock_by_id(self, stock_id: str) -> Optional[dict]:
         """根據股票代號取得該股票資訊"""
         conn = self._get_connection()
-        query = "SELECT * FROM Company_Dim WHERE 證券代號 = ?"
-        df = pd.read_sql_query(query, conn, params=(stock_id,))
-        conn.close()
+        try:
+            query = "SELECT * FROM Company_Dim WHERE 證券代號 = ?"
+            df = pd.read_sql_query(query, conn, params=(stock_id,))
+        finally:
+            self._return_connection(conn)
         
         if df.empty:
             return None
@@ -44,17 +75,21 @@ class StockDataQuery:
     def get_stocks_by_industry(self, industry: str) -> pd.DataFrame:
         """根據產業類別取得所有股票"""
         conn = self._get_connection()
-        query = "SELECT 證券代號, 證券名稱, 產業類別 FROM Company_Dim WHERE 產業類別 = ?"
-        df = pd.read_sql_query(query, conn, params=(industry,))
-        conn.close()
+        try:
+            query = "SELECT 證券代號, 證券名稱, 產業類別 FROM Company_Dim WHERE 產業類別 = ?"
+            df = pd.read_sql_query(query, conn, params=(industry,))
+        finally:
+            self._return_connection(conn)
         return df
     
     def get_all_industries(self) -> List[str]:
         """取得所有產業類別"""
         conn = self._get_connection()
-        query = "SELECT DISTINCT 產業類別 FROM Company_Dim WHERE 產業類別 IS NOT NULL ORDER BY 產業類別"
-        df = pd.read_sql_query(query, conn)
-        conn.close()
+        try:
+            query = "SELECT DISTINCT 產業類別 FROM Company_Dim WHERE 產業類別 IS NOT NULL ORDER BY 產業類別"
+            df = pd.read_sql_query(query, conn)
+        finally:
+            self._return_connection(conn)
         return df['產業類別'].tolist()
     
     # ================== 歷史價格數據 ==================
@@ -171,14 +206,16 @@ class StockDataQuery:
     def get_dividend_history(self, stock_id: str) -> pd.DataFrame:
         """取得股票的除權息歷史"""
         conn = self._get_connection()
-        query = """
-            SELECT 除權息日期, 現金股利, 股票股利 
-            FROM Dividend_Fact 
-            WHERE 證券代號 = ? 
-            ORDER BY 除權息日期
-        """
-        df = pd.read_sql_query(query, conn, params=(stock_id,))
-        conn.close()
+        try:
+            query = """
+                SELECT 除權息日期, 現金股利, 股票股利 
+                FROM Dividend_Fact 
+                WHERE 證券代號 = ? 
+                ORDER BY 除權息日期
+            """
+            df = pd.read_sql_query(query, conn, params=(stock_id,))
+        finally:
+            self._return_connection(conn)
         return df
     
     # ================== 標籤功能 ==================
@@ -186,56 +223,67 @@ class StockDataQuery:
     def add_tag(self, tag_name: str) -> int:
         """新增標籤，返回 Tag_ID"""
         conn = self._get_connection()
-        cursor = conn.cursor()
         try:
-            cursor.execute("INSERT INTO Tag_Dim (Tag_Name) VALUES (?)", (tag_name,))
-            conn.commit()
-            tag_id = cursor.lastrowid
-            conn.close()
+            cursor = conn.cursor()
+            try:
+                cursor.execute("INSERT INTO Tag_Dim (Tag_Name) VALUES (?)", (tag_name,))
+                conn.commit()
+                tag_id = cursor.lastrowid
+            except sqlite3.IntegrityError:
+                # 標籤已存在，取得其 ID
+                cursor.execute("SELECT Tag_ID FROM Tag_Dim WHERE Tag_Name = ?", (tag_name,))
+                tag_id = cursor.fetchone()[0]
+            finally:
+                self._return_connection(conn)
             return tag_id
-        except sqlite3.IntegrityError:
-            # 標籤已存在，取得其 ID
-            cursor.execute("SELECT Tag_ID FROM Tag_Dim WHERE Tag_Name = ?", (tag_name,))
-            tag_id = cursor.fetchone()[0]
-            conn.close()
-            return tag_id
+        except Exception:
+            self._return_connection(conn)
+            raise
     
     def tag_stock(self, stock_id: str, tag_name: str):
         """為股票添加標籤"""
         tag_id = self.add_tag(tag_name)
         conn = self._get_connection()
-        cursor = conn.cursor()
         try:
-            cursor.execute(
-                "INSERT INTO Company_Tag_Map (證券代號, Tag_ID) VALUES (?, ?)",
-                (stock_id, tag_id)
-            )
-            conn.commit()
-        except sqlite3.IntegrityError:
-            pass  # 標籤已存在
-        finally:
-            conn.close()
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    "INSERT INTO Company_Tag_Map (證券代號, Tag_ID) VALUES (?, ?)",
+                    (stock_id, tag_id)
+                )
+                conn.commit()
+            except sqlite3.IntegrityError:
+                pass  # 標籤已存在
+            finally:
+                self._return_connection(conn)
+        except Exception:
+            self._return_connection(conn)
+            raise
     
     def get_stocks_by_tag(self, tag_name: str) -> pd.DataFrame:
         """取得擁有特定標籤的所有股票"""
         conn = self._get_connection()
-        query = """
-            SELECT DISTINCT c.證券代號, c.證券名稱, c.產業類別
-            FROM Company_Dim c
-            JOIN Company_Tag_Map m ON c.證券代號 = m.證券代號
-            JOIN Tag_Dim t ON m.Tag_ID = t.Tag_ID
-            WHERE t.Tag_Name = ?
-        """
-        df = pd.read_sql_query(query, conn, params=(tag_name,))
-        conn.close()
+        try:
+            query = """
+                SELECT DISTINCT c.證券代號, c.證券名稱, c.產業類別
+                FROM Company_Dim c
+                JOIN Company_Tag_Map m ON c.證券代號 = m.證券代號
+                JOIN Tag_Dim t ON m.Tag_ID = t.Tag_ID
+                WHERE t.Tag_Name = ?
+            """
+            df = pd.read_sql_query(query, conn, params=(tag_name,))
+        finally:
+            self._return_connection(conn)
         return df
     
     def get_all_tags(self) -> List[str]:
         """取得所有標籤"""
         conn = self._get_connection()
-        query = "SELECT DISTINCT Tag_Name FROM Tag_Dim ORDER BY Tag_Name"
-        df = pd.read_sql_query(query, conn)
-        conn.close()
+        try:
+            query = "SELECT DISTINCT Tag_Name FROM Tag_Dim ORDER BY Tag_Name"
+            df = pd.read_sql_query(query, conn)
+        finally:
+            self._return_connection(conn)
         return df['Tag_Name'].tolist() if not df.empty else []
 
     # ================== 族群 (主題標籤) 進階查詢 ==================
@@ -250,57 +298,67 @@ class StockDataQuery:
             )
         except Exception:
             df = pd.DataFrame()
-        conn.close()
+        finally:
+            self._return_connection(conn)
         return df
 
     def get_tags_with_category(self) -> pd.DataFrame:
         """取得所有族群標籤 (含分類與股票數量)"""
         conn = self._get_connection()
-        query = """
-            SELECT t.Tag_ID, t.Tag_Name, t.描述,
-                   c.Category_Name AS 分類,
-                   COUNT(m.證券代號) AS 股票數
-            FROM Tag_Dim t
-            LEFT JOIN Tag_Category c ON t.Category_ID = c.Category_ID
-            LEFT JOIN Company_Tag_Map m ON t.Tag_ID = m.Tag_ID
-            GROUP BY t.Tag_ID
-            ORDER BY c.排序, 股票數 DESC
-        """
         try:
+            query = """
+                SELECT t.Tag_ID, t.Tag_Name, t.描述,
+                       c.Category_Name AS 分類,
+                       COUNT(m.證券代號) AS 股票數
+                FROM Tag_Dim t
+                LEFT JOIN Tag_Category c ON t.Category_ID = c.Category_ID
+                LEFT JOIN Company_Tag_Map m ON t.Tag_ID = m.Tag_ID
+                GROUP BY t.Tag_ID
+                ORDER BY c.排序, 股票數 DESC
+            """
             df = pd.read_sql_query(query, conn)
         except Exception:
             df = pd.DataFrame()
-        conn.close()
+        finally:
+            self._return_connection(conn)
         return df
 
     def get_tags_by_category(self, category_name: str) -> list:
         """取得某分類維度下的所有族群名稱"""
         conn = self._get_connection()
-        query = """
-            SELECT t.Tag_Name
-            FROM Tag_Dim t
-            JOIN Tag_Category c ON t.Category_ID = c.Category_ID
-            WHERE c.Category_Name = ?
-            ORDER BY t.Tag_Name
-        """
-        df = pd.read_sql_query(query, conn, params=(category_name,))
-        conn.close()
+        try:
+            query = """
+                SELECT t.Tag_Name
+                FROM Tag_Dim t
+                JOIN Tag_Category c ON t.Category_ID = c.Category_ID
+                WHERE c.Category_Name = ?
+                ORDER BY t.Tag_Name
+            """
+            df = pd.read_sql_query(query, conn, params=(category_name,))
+        except Exception:
+            df = pd.DataFrame()
+        finally:
+            self._return_connection(conn)
         return df['Tag_Name'].tolist() if not df.empty else []
 
     def get_stocks_by_tag_detailed(self, tag_name: str) -> pd.DataFrame:
         """取得某族群的股票 (含關聯強度與資料來源)"""
         conn = self._get_connection()
-        query = """
-            SELECT c.證券代號, c.證券名稱, c.產業類別,
-                   m.關聯強度, m.資料來源
-            FROM Company_Dim c
-            JOIN Company_Tag_Map m ON c.證券代號 = m.證券代號
-            JOIN Tag_Dim t ON m.Tag_ID = t.Tag_ID
-            WHERE t.Tag_Name = ?
-            ORDER BY m.關聯強度 DESC
-        """
-        df = pd.read_sql_query(query, conn, params=(tag_name,))
-        conn.close()
+        try:
+            query = """
+                SELECT c.證券代號, c.證券名稱, c.產業類別,
+                       m.關聯強度, m.資料來源
+                FROM Company_Dim c
+                JOIN Company_Tag_Map m ON c.證券代號 = m.證券代號
+                JOIN Tag_Dim t ON m.Tag_ID = t.Tag_ID
+                WHERE t.Tag_Name = ?
+                ORDER BY m.關聯強度 DESC
+            """
+            df = pd.read_sql_query(query, conn, params=(tag_name,))
+        except Exception:
+            df = pd.DataFrame()
+        finally:
+            self._return_connection(conn)
         return df
 
     def get_stocks_by_multiple_tags(self, tag_names: list, mode: str = "AND") -> pd.DataFrame:
@@ -315,54 +373,62 @@ class StockDataQuery:
             return pd.DataFrame()
 
         conn = self._get_connection()
-        placeholders = ','.join('?' * len(tag_names))
+        try:
+            placeholders = ','.join('?' * len(tag_names))
 
-        if mode == "AND":
-            query = f"""
-                SELECT c.證券代號, c.證券名稱, c.產業類別,
-                       COUNT(DISTINCT t.Tag_Name) AS 命中族群數,
-                       GROUP_CONCAT(DISTINCT t.Tag_Name) AS 所屬族群
-                FROM Company_Dim c
-                JOIN Company_Tag_Map m ON c.證券代號 = m.證券代號
-                JOIN Tag_Dim t ON m.Tag_ID = t.Tag_ID
-                WHERE t.Tag_Name IN ({placeholders})
-                GROUP BY c.證券代號
-                HAVING 命中族群數 = ?
-                ORDER BY 命中族群數 DESC
-            """
-            params = tag_names + [len(tag_names)]
-        else:  # OR
-            query = f"""
-                SELECT c.證券代號, c.證券名稱, c.產業類別,
-                       COUNT(DISTINCT t.Tag_Name) AS 命中族群數,
-                       GROUP_CONCAT(DISTINCT t.Tag_Name) AS 所屬族群
-                FROM Company_Dim c
-                JOIN Company_Tag_Map m ON c.證券代號 = m.證券代號
-                JOIN Tag_Dim t ON m.Tag_ID = t.Tag_ID
-                WHERE t.Tag_Name IN ({placeholders})
-                GROUP BY c.證券代號
-                ORDER BY 命中族群數 DESC
-            """
-            params = tag_names
+            if mode == "AND":
+                query = f"""
+                    SELECT c.證券代號, c.證券名稱, c.產業類別,
+                           COUNT(DISTINCT t.Tag_Name) AS 命中族群數,
+                           GROUP_CONCAT(DISTINCT t.Tag_Name) AS 所屬族群
+                    FROM Company_Dim c
+                    JOIN Company_Tag_Map m ON c.證券代號 = m.證券代號
+                    JOIN Tag_Dim t ON m.Tag_ID = t.Tag_ID
+                    WHERE t.Tag_Name IN ({placeholders})
+                    GROUP BY c.證券代號
+                    HAVING 命中族群數 = ?
+                    ORDER BY 命中族群數 DESC
+                """
+                params = tag_names + [len(tag_names)]
+            else:  # OR
+                query = f"""
+                    SELECT c.證券代號, c.證券名稱, c.產業類別,
+                           COUNT(DISTINCT t.Tag_Name) AS 命中族群數,
+                           GROUP_CONCAT(DISTINCT t.Tag_Name) AS 所屬族群
+                    FROM Company_Dim c
+                    JOIN Company_Tag_Map m ON c.證券代號 = m.證券代號
+                    JOIN Tag_Dim t ON m.Tag_ID = t.Tag_ID
+                    WHERE t.Tag_Name IN ({placeholders})
+                    GROUP BY c.證券代號
+                    ORDER BY 命中族群數 DESC
+                """
+                params = tag_names
 
-        df = pd.read_sql_query(query, conn, params=params)
-        conn.close()
+            df = pd.read_sql_query(query, conn, params=params)
+        except Exception:
+            df = pd.DataFrame()
+        finally:
+            self._return_connection(conn)
         return df
 
     def get_tags_of_stock(self, stock_id: str) -> pd.DataFrame:
         """取得某股票所屬的所有族群 (含分類與強度)"""
         conn = self._get_connection()
-        query = """
-            SELECT t.Tag_Name AS 族群, c.Category_Name AS 分類,
-                   m.關聯強度, m.資料來源
-            FROM Company_Tag_Map m
-            JOIN Tag_Dim t ON m.Tag_ID = t.Tag_ID
-            LEFT JOIN Tag_Category c ON t.Category_ID = c.Category_ID
-            WHERE m.證券代號 = ?
-            ORDER BY m.關聯強度 DESC
-        """
-        df = pd.read_sql_query(query, conn, params=(stock_id,))
-        conn.close()
+        try:
+            query = """
+                SELECT t.Tag_Name AS 族群, c.Category_Name AS 分類,
+                       m.關聯強度, m.資料來源
+                FROM Company_Tag_Map m
+                JOIN Tag_Dim t ON m.Tag_ID = t.Tag_ID
+                LEFT JOIN Tag_Category c ON t.Category_ID = c.Category_ID
+                WHERE m.證券代號 = ?
+                ORDER BY m.關聯強度 DESC
+            """
+            df = pd.read_sql_query(query, conn, params=(stock_id,))
+        except Exception:
+            df = pd.DataFrame()
+        finally:
+            self._return_connection(conn)
         return df
 
     def set_stock_tag(self, stock_id: str, tag_name: str,
@@ -371,44 +437,49 @@ class StockDataQuery:
         from datetime import datetime
         tag_id = self.add_tag(tag_name)
         conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT OR REPLACE INTO Company_Tag_Map
-            (證券代號, Tag_ID, 關聯強度, 資料來源, 更新時間)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (stock_id, tag_id, strength, source, datetime.now().isoformat()))
-        conn.commit()
-        conn.close()
+        try:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT OR REPLACE INTO Company_Tag_Map
+                (證券代號, Tag_ID, 關聯強度, 資料來源, 更新時間)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (stock_id, tag_id, strength, source, datetime.now().isoformat()))
+            conn.commit()
+        finally:
+            self._return_connection(conn)
 
     def remove_stock_tag(self, stock_id: str, tag_name: str):
         """移除股票的族群標籤"""
         conn = self._get_connection()
-        cursor = conn.cursor()
-        cursor.execute('''
-            DELETE FROM Company_Tag_Map
-            WHERE 證券代號 = ? AND Tag_ID = (SELECT Tag_ID FROM Tag_Dim WHERE Tag_Name = ?)
-        ''', (stock_id, tag_name))
-        conn.commit()
-        conn.close()
+        try:
+            cursor = conn.cursor()
+            cursor.execute('''
+                DELETE FROM Company_Tag_Map
+                WHERE 證券代號 = ? AND Tag_ID = (SELECT Tag_ID FROM Tag_Dim WHERE Tag_Name = ?)
+            ''', (stock_id, tag_name))
+            conn.commit()
+        finally:
+            self._return_connection(conn)
 
     # ================== 月營收查詢 ==================
 
     def get_revenue_history(self, stock_id: str, limit: int = 24) -> pd.DataFrame:
         """取得股票的月營收歷史 (最近 N 個月)"""
         conn = self._get_connection()
-        query = """
-            SELECT 年月, 當月營收, 去年同月營收, 月增率, 年增率,
-                   當月累計營收, 累計年增率
-            FROM Revenue_Fact
-            WHERE 證券代號 = ?
-            ORDER BY 年月 DESC
-            LIMIT ?
-        """
         try:
+            query = """
+                SELECT 年月, 當月營收, 去年同月營收, 月增率, 年增率,
+                       當月累計營收, 累計年增率
+                FROM Revenue_Fact
+                WHERE 證券代號 = ?
+                ORDER BY 年月 DESC
+                LIMIT ?
+            """
             df = pd.read_sql_query(query, conn, params=(stock_id, limit))
         except Exception:
             df = pd.DataFrame()
-        conn.close()
+        finally:
+            self._return_connection(conn)
         if not df.empty:
             df = df.sort_values('年月').reset_index(drop=True)
         return df
@@ -429,22 +500,23 @@ class StockDataQuery:
             by: 排序依據 ('年增率', '月增率', '當月營收')
         """
         conn = self._get_connection()
-        query = """
-            SELECT c.證券代號, c.證券名稱, r.年月,
-                   r.當月營收, r.月增率, r.年增率, m.關聯強度
-            FROM Company_Dim c
-            JOIN Company_Tag_Map m ON c.證券代號 = m.證券代號
-            JOIN Tag_Dim t ON m.Tag_ID = t.Tag_ID
-            JOIN Revenue_Fact r ON c.證券代號 = r.證券代號
-            WHERE t.Tag_Name = ?
-              AND r.年月 = (SELECT MAX(年月) FROM Revenue_Fact WHERE 證券代號 = c.證券代號)
-            ORDER BY r.{} DESC
-        """.format(by if by in ('年增率', '月增率', '當月營收') else '年增率')
         try:
+            query = """
+                SELECT c.證券代號, c.證券名稱, r.年月,
+                       r.當月營收, r.月增率, r.年增率, m.關聯強度
+                FROM Company_Dim c
+                JOIN Company_Tag_Map m ON c.證券代號 = m.證券代號
+                JOIN Tag_Dim t ON m.Tag_ID = t.Tag_ID
+                JOIN Revenue_Fact r ON c.證券代號 = r.證券代號
+                WHERE t.Tag_Name = ?
+                  AND r.年月 = (SELECT MAX(年月) FROM Revenue_Fact WHERE 證券代號 = c.證券代號)
+                ORDER BY r.{} DESC
+            """.format(by if by in ('年增率', '月增率', '當月營收') else '年增率')
             df = pd.read_sql_query(query, conn, params=(tag_name,))
         except Exception:
             df = pd.DataFrame()
-        conn.close()
+        finally:
+            self._return_connection(conn)
         return df
 
     # ================== 重大事件查詢 ==================
@@ -452,17 +524,18 @@ class StockDataQuery:
     def get_events_of_stock(self, stock_id: str) -> pd.DataFrame:
         """取得股票的重大事件 (法說會等)"""
         conn = self._get_connection()
-        query = """
-            SELECT 日期, 類型, 標題, 內容摘要, 來源連結
-            FROM Catalyst_Event
-            WHERE 證券代號 = ?
-            ORDER BY 日期 DESC
-        """
         try:
+            query = """
+                SELECT 日期, 類型, 標題, 內容摘要, 來源連結
+                FROM Catalyst_Event
+                WHERE 證券代號 = ?
+                ORDER BY 日期 DESC
+            """
             df = pd.read_sql_query(query, conn, params=(stock_id,))
         except Exception:
             df = pd.DataFrame()
-        conn.close()
+        finally:
+            self._return_connection(conn)
         return df
 
     # ================== 系統狀態 ==================
@@ -506,7 +579,7 @@ class StockDataQuery:
             )
             latest_update_time = cursor.fetchone()[0]
 
-            conn.close()
+            self._return_connection(conn)
             return {
                 'latest_date': latest_date,
                 'total_stocks': total_stocks,
@@ -530,7 +603,7 @@ class StockDataQuery:
                 "SELECT COUNT(*) FROM fetch_status WHERE status IN ('pending', 'error')"
             )
             count = cursor.fetchone()[0]
-            conn.close()
+            self._return_connection(conn)
             return count
         except Exception:
             return 0

@@ -114,81 +114,91 @@ def validate_and_clean(df, date_str):
 def init_etl_status():
     """建立 ETL_Status 追蹤表，並同步 staging 目錄的檔案清單"""
     conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS ETL_Status (
-            檔案名稱 TEXT PRIMARY KEY,
-            日期 TEXT,
-            市場 TEXT,
-            狀態 TEXT DEFAULT 'pending',
-            驗證狀態 TEXT DEFAULT 'pending',
-            更新時間 TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    # 掃描 staging 中所有 JSON，確保都有記錄
-    for f in STAGING_DIR.glob("*.json"):
-        fname = f.name
-        if fname.startswith("OTC_"):
-            market, raw = 'TPEx', fname.replace('OTC_', '').replace('.json', '')
-        else:
-            market, raw = 'TWSE', fname.replace('.json', '')
-        if len(raw) != 8:
-            continue
-        date_str = f"{raw[:4]}-{raw[4:6]}-{raw[6:8]}"
+    try:
+        cursor = conn.cursor()
         cursor.execute('''
-            INSERT OR IGNORE INTO ETL_Status (檔案名稱, 日期, 市場, 狀態, 驗證狀態)
-            VALUES (?, ?, ?, 'pending', 'pending')
-        ''', (fname, date_str, market))
-    conn.commit()
-    conn.close()
+            CREATE TABLE IF NOT EXISTS ETL_Status (
+                檔案名稱 TEXT PRIMARY KEY,
+                日期 TEXT,
+                市場 TEXT,
+                狀態 TEXT DEFAULT 'pending',
+                驗證狀態 TEXT DEFAULT 'pending',
+                更新時間 TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        # 掃描 staging 中所有 JSON，確保都有記錄
+        for f in STAGING_DIR.glob("*.json"):
+            fname = f.name
+            if fname.startswith("OTC_"):
+                market, raw = 'TPEx', fname.replace('OTC_', '').replace('.json', '')
+            else:
+                market, raw = 'TWSE', fname.replace('.json', '')
+            if len(raw) != 8:
+                continue
+            date_str = f"{raw[:4]}-{raw[4:6]}-{raw[6:8]}"
+            cursor.execute('''
+                INSERT OR IGNORE INTO ETL_Status (檔案名稱, 日期, 市場, 狀態, 驗證狀態)
+                VALUES (?, ?, ?, 'pending', 'pending')
+            ''', (fname, date_str, market))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def mark_validation_done(filename, success: bool):
     """將檔案的驗證狀態標記為完成"""
     conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    status = 'valid' if success else 'invalid'
-    cursor.execute(
-        "UPDATE ETL_Status SET 驗證狀態=?, 更新時間=CURRENT_TIMESTAMP WHERE 檔案名稱=?",
-        (status, filename)
-    )
-    conn.commit()
-    conn.close()
+    try:
+        cursor = conn.cursor()
+        status = 'valid' if success else 'invalid'
+        cursor.execute(
+            "UPDATE ETL_Status SET 驗證狀態=?, 更新時間=CURRENT_TIMESTAMP WHERE 檔案名稱=?",
+            (status, filename)
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def get_data_freshness():
     """取得最新的有效資料日期"""
     conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT MAX(日期) FROM ETL_Status WHERE 驗證狀態='valid'"
-    )
-    row = cursor.fetchone()
-    conn.close()
-    return row[0] if row else None
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT MAX(日期) FROM ETL_Status WHERE 驗證狀態='valid'"
+        )
+        row = cursor.fetchone()
+        return row[0] if row else None
+    finally:
+        conn.close()
 
 
 def get_pending_files():
     """回傳尚未 ETL 的檔案名稱列表"""
     conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT 檔案名稱 FROM ETL_Status WHERE 狀態 = 'pending' ORDER BY 日期 ASC")
-    pending = [row[0] for row in cursor.fetchall()]
-    conn.close()
-    return pending
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT 檔案名稱 FROM ETL_Status WHERE 狀態 = 'pending' ORDER BY 日期 ASC")
+        pending = [row[0] for row in cursor.fetchall()]
+        return pending
+    finally:
+        conn.close()
 
 
 def mark_etl_done(filenames):
     """將指定檔案標記為 ETL 完成"""
     conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    for fname in filenames:
-        cursor.execute(
-            "UPDATE ETL_Status SET 狀態='done', 更新時間=CURRENT_TIMESTAMP WHERE 檔案名稱=?",
-            (fname,)
-        )
-    conn.commit()
-    conn.close()
+    try:
+        cursor = conn.cursor()
+        for fname in filenames:
+            cursor.execute(
+                "UPDATE ETL_Status SET 狀態='done', 更新時間=CURRENT_TIMESTAMP WHERE 檔案名稱=?",
+                (fname,)
+            )
+        conn.commit()
+    finally:
+        conn.close()
 
 def clean_and_transform(df, date_str):
     """資料清洗與轉換核心邏輯（整合 validate_and_clean）"""
@@ -204,69 +214,71 @@ def init_sqlite_schema(latest_companies_df, otc_codes: set = None):
         otc_codes = set()
     print("\n[DB] 正在初始化 SQLite 資料庫與維度表...")
     conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
+    try:
+        cursor = conn.cursor()
 
-    # 1. Company_Dim (股票總覽表，含上市/上櫃狀態)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS Company_Dim (
-            證券代號 TEXT PRIMARY KEY,
-            證券名稱 TEXT,
-            產業類別 TEXT,
-            狀態 TEXT DEFAULT '上市',
-            更新時間 TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-
-    # 2. Tag_Dim (標籤表)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS Tag_Dim (
-            Tag_ID INTEGER PRIMARY KEY AUTOINCREMENT,
-            Tag_Name TEXT UNIQUE
-        )
-    ''')
-
-    # 3. Company_Tag_Map (股票與標籤多對多映射表)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS Company_Tag_Map (
-            證券代號 TEXT,
-            Tag_ID INTEGER,
-            PRIMARY KEY (證券代號, Tag_ID),
-            FOREIGN KEY (證券代號) REFERENCES Company_Dim(證券代號),
-            FOREIGN KEY (Tag_ID) REFERENCES Tag_Dim(Tag_ID)
-        )
-    ''')
-
-    # 4. Dividend_Fact (除權息事件表)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS Dividend_Fact (
-            事件_ID INTEGER PRIMARY KEY AUTOINCREMENT,
-            證券代號 TEXT,
-            除權息日期 TEXT,
-            現金股利 REAL DEFAULT 0.0,
-            股票股利 REAL DEFAULT 0.0,
-            FOREIGN KEY (證券代號) REFERENCES Company_Dim(證券代號)
-        )
-    ''')
-
-    # 寫入最新股票清單到 Company_Dim (含上市/上櫃狀態，保留既有產業類別)
-    latest_companies_df = latest_companies_df[['證券代號', '證券名稱']].drop_duplicates()
-    for _, row in latest_companies_df.iterrows():
-        code = str(row['證券代號']).strip()
-        status = '上櫃' if code in otc_codes else '上市'
-        name = str(row['證券名稱']).strip()
-        # 先嘗試更新已存在的股票 (保留產業類別)
+        # 1. Company_Dim (股票總覽表，含上市/上櫃狀態)
         cursor.execute('''
-            UPDATE Company_Dim SET 證券名稱 = ?, 狀態 = ?, 更新時間 = CURRENT_TIMESTAMP
-            WHERE 證券代號 = ?
-        ''', (name, status, code))
-        if cursor.rowcount == 0:
-            # 不存在才新增
-            cursor.execute('''
-                INSERT INTO Company_Dim (證券代號, 證券名稱, 狀態) VALUES (?, ?, ?)
-            ''', (code, name, status))
+            CREATE TABLE IF NOT EXISTS Company_Dim (
+                證券代號 TEXT PRIMARY KEY,
+                證券名稱 TEXT,
+                產業類別 TEXT,
+                狀態 TEXT DEFAULT '上市',
+                更新時間 TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
 
-    conn.commit()
-    conn.close()
+        # 2. Tag_Dim (標籤表)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS Tag_Dim (
+                Tag_ID INTEGER PRIMARY KEY AUTOINCREMENT,
+                Tag_Name TEXT UNIQUE
+            )
+        ''')
+
+        # 3. Company_Tag_Map (股票與標籤多對多映射表)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS Company_Tag_Map (
+                證券代號 TEXT,
+                Tag_ID INTEGER,
+                PRIMARY KEY (證券代號, Tag_ID),
+                FOREIGN KEY (證券代號) REFERENCES Company_Dim(證券代號),
+                FOREIGN KEY (Tag_ID) REFERENCES Tag_Dim(Tag_ID)
+            )
+        ''')
+
+        # 4. Dividend_Fact (除權息事件表)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS Dividend_Fact (
+                事件_ID INTEGER PRIMARY KEY AUTOINCREMENT,
+                證券代號 TEXT,
+                除權息日期 TEXT,
+                現金股利 REAL DEFAULT 0.0,
+                股票股利 REAL DEFAULT 0.0,
+                FOREIGN KEY (證券代號) REFERENCES Company_Dim(證券代號)
+            )
+        ''')
+
+        # 寫入最新股票清單到 Company_Dim (含上市/上櫃狀態，保留既有產業類別)
+        latest_companies_df = latest_companies_df[['證券代號', '證券名稱']].drop_duplicates()
+        for _, row in latest_companies_df.iterrows():
+            code = str(row['證券代號']).strip()
+            status = '上櫃' if code in otc_codes else '上市'
+            name = str(row['證券名稱']).strip()
+            # 先嘗試更新已存在的股票 (保留產業類別)
+            cursor.execute('''
+                UPDATE Company_Dim SET 證券名稱 = ?, 狀態 = ?, 更新時間 = CURRENT_TIMESTAMP
+                WHERE 證券代號 = ?
+            ''', (name, status, code))
+            if cursor.rowcount == 0:
+                # 不存在才新增
+                cursor.execute('''
+                    INSERT INTO Company_Dim (證券代號, 證券名稱, 狀態) VALUES (?, ?, ?)
+                ''', (code, name, status))
+
+        conn.commit()
+    finally:
+        conn.close()
     counts = {'上市': 0, '上櫃': 0}
     for code in latest_companies_df['證券代號'].astype(str).str.strip():
         counts['上櫃' if code in otc_codes else '上市'] += 1
@@ -381,20 +393,22 @@ def incremental_main():
 
     # Step 3: 更新 Company_Dim (新增股票，保留既有產業類別)
     conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    for code, name in new_stocks.items():
-        status = '上櫃' if code in otc_codes else '上市'
-        cursor.execute(
-            "UPDATE Company_Dim SET 證券名稱=?, 狀態=?, 更新時間=CURRENT_TIMESTAMP WHERE 證券代號=?",
-            (name, status, code)
-        )
-        if cursor.rowcount == 0:
+    try:
+        cursor = conn.cursor()
+        for code, name in new_stocks.items():
+            status = '上櫃' if code in otc_codes else '上市'
             cursor.execute(
-                "INSERT INTO Company_Dim (證券代號, 證券名稱, 狀態) VALUES (?, ?, ?)",
-                (code, name, status)
+                "UPDATE Company_Dim SET 證券名稱=?, 狀態=?, 更新時間=CURRENT_TIMESTAMP WHERE 證券代號=?",
+                (name, status, code)
             )
-    conn.commit()
-    conn.close()
+            if cursor.rowcount == 0:
+                cursor.execute(
+                    "INSERT INTO Company_Dim (證券代號, 證券名稱, 狀態) VALUES (?, ?, ?)",
+                    (code, name, status)
+                )
+        conn.commit()
+    finally:
+        conn.close()
 
     # Step 4: 標記完成
     mark_etl_done(valid_pending)
@@ -472,10 +486,12 @@ def rebuild_main():
     # 重建後所有檔案都標記完成
     init_etl_status()
     conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("UPDATE ETL_Status SET 狀態='done', 更新時間=CURRENT_TIMESTAMP")
-    conn.commit()
-    conn.close()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE ETL_Status SET 狀態='done', 更新時間=CURRENT_TIMESTAMP")
+        conn.commit()
+    finally:
+        conn.close()
 
     print("\n✅ ETL 完整重建大功告成！")
 
