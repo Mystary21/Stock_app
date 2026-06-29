@@ -823,51 +823,58 @@ elif page == "🔍 選股篩選":
 elif page == "🎯 回測策略":
     st.title("🎯 量化策略回測")
     
-    col1, col2 = st.columns(2)
+    # 回測模式選擇
+    mode = st.radio(
+        "選擇回測模式",
+        ["單股回測", "多股組合回測"]
+    )
     
-    with col1:
-        stock_id = searchable_stock_select("選擇股票", "backtest_stock")
-        if stock_id is None:
-            st.stop()
-    
-    with col2:
-        strategy = st.selectbox(
-            "選擇策略",
-            ["SMA 交叉策略", "RSI 超買超賣策略", "MACD 策略"]
-        )
-    
-    # 回測參數
-    col3, col4, col5 = st.columns(3)
-    
-    with col3:
-        start_date = st.date_input("開始日期", value=datetime.now() - timedelta(days=365))
-    
-    with col4:
-        end_date = st.date_input("結束日期", value=datetime.now())
-    
-    with col5:
-        initial_capital = st.number_input("初始資本", value=100000, min_value=1000, step=1000)
-    
-    if st.button("開始回測", type="primary"):
-        with st.spinner("回測中..."):
-            try:
-                engine = BacktestEngine(
-                    stock_id,
-                    start_date.strftime('%Y-%m-%d'),
-                    end_date.strftime('%Y-%m-%d'),
-                    initial_capital
-                )
-                
-                # 選擇策略
-                if strategy == "SMA 交叉策略":
-                    engine.add_signal(StrategyLibrary.sma_crossover_strategy)
-                elif strategy == "RSI 超買超賣策略":
-                    engine.add_signal(StrategyLibrary.rsi_strategy)
-                else:  # MACD
-                    engine.add_signal(StrategyLibrary.macd_strategy)
-                
-                # 執行回測
-                results = engine.backtest()
+    if mode == "單股回測":
+        st.subheader("📈 單股回測")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            stock_id = searchable_stock_select("選擇股票", "backtest_stock")
+            if stock_id is None:
+                st.stop()
+        
+        with col2:
+            strategy = st.selectbox(
+                "選擇策略",
+                ["SMA 交叉策略", "RSI 超買超賣策略", "MACD 策略"]
+            )
+        
+        # 回測參數
+        col3, col4, col5 = st.columns(3)
+        
+        with col3:
+            start_date = st.date_input("開始日期", value=datetime.now() - timedelta(days=365))
+        
+        with col4:
+            end_date = st.date_input("結束日期", value=datetime.now())
+        
+        with col5:
+            initial_capital = st.number_input("初始資本", value=100000, min_value=1000, step=1000)
+        
+        if st.button("開始回測", type="primary"):
+            with st.spinner("回測中..."):
+                try:
+                    engine = BacktestEngine(
+                        [stock_id],
+                        start_date.strftime('%Y-%m-%d'),
+                        end_date.strftime('%Y-%m-%d'),
+                        initial_capital
+                    )
+                    
+                    if strategy == "SMA 交叉策略":
+                        engine.add_signal(StrategyLibrary.sma_crossover_strategy)
+                    elif strategy == "RSI 超買超賣策略":
+                        engine.add_signal(StrategyLibrary.rsi_strategy)
+                    else:  # MACD
+                        engine.add_signal(StrategyLibrary.macd_strategy)
+                    
+                   results = engine.backtest()
                 
                 # 顯示結果
                 st.success("回測完成！")
@@ -877,19 +884,19 @@ elif page == "🎯 回測策略":
                 col1, col2, col3, col4 = st.columns(4)
                 
                 with col1:
-                    st.metric("初始資本", f"${results['初始資本']:,.0f}")
+                    st.metric("股票", stock_id)
                 
                 with col2:
+                    st.metric("初始資本", f"${results['初始資本']:,.0f}")
+                
+                with col3:
                     final_value = results['最終價值']
                     profit = final_value - results['初始資本']
                     st.metric("最終價值", f"${final_value:,.0f}", 
                             delta=f"${profit:,.0f}")
                 
-                with col3:
-                    st.metric("總報酬率", f"{results['總報酬率%']:.2f}%")
-                
                 with col4:
-                    st.metric("年化報酬率", f"{results['年化報酬率%']:.2f}%")
+                    st.metric("總報酬率", f"{results['總報酬率%']:.2f}%")
                 
                 col5, col6, col7 = st.columns(3)
                 
@@ -917,13 +924,13 @@ elif page == "🎯 回測策略":
                 ))
                 
                 fig.update_layout(
-                    title="組合淨值曲線",
+                    title=f"{stock_id} 組合淨值曲線",
                     yaxis_title="價值 ($)",
                     xaxis_title="日期",
                     template="plotly_white",
                     height=400,
                     hovermode='x unified'
-                )
+                ))
                 
                 st.plotly_chart(fig, use_container_width=True)
                 
@@ -938,11 +945,128 @@ elif page == "🎯 回測策略":
 
 
 # ============================================================================
+# 多股組合回測頁面
+# ============================================================================
+
+elif mode == "多股組合回測":
+    st.subheader("📊 多股組合回測")
+    
+    st.caption("選擇多檔股票進行組合回測，資金平均分配到每檔股票")
+    
+    # 股票選擇
+    st.markdown("**選擇回測股票**")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        stock1 = searchable_stock_select("股票 1", "backtest_stock1")
+    
+    with col2:
+        stock2 = searchable_stock_select("股票 2", "backtest_stock2")
+    
+    with col3:
+        stock3 = searchable_stock_select("股票 3", "backtest_stock3")
+    
+    # 收集股票
+    selected_stocks = []
+    if stock1:
+        selected_stocks.append(stock1)
+    if stock2:
+        selected_stocks.append(stock2)
+    if stock3:
+        selected_stocks.append(stock3)
+    
+    if not selected_stocks:
+        st.warning("請至少選擇一檔股票")
+    elif len(selected_stocks) < 2:
+        st.info("建議至少選擇 2 檔股票進行組合回測")
+    
+    if st.button("開始組合回測", type="primary", disabled=len(selected_stocks) < 2):
+        with st.spinner("回測中..."):
+            try:
+                engine = BacktestEngine(
+                    selected_stocks,
+                    start_date.strftime('%Y-%m-%d'),
+                    end_date.strftime('%Y-%m-%d'),
+                    initial_capital
+                )
+                
+                engine.add_signal(StrategyLibrary.sma_crossover_strategy)
+                
+                results = engine.backtest()
+                
+                st.success("組合回測完成！")
+                
+                st.subheader("📊 組合回測結果")
+                
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    st.metric("股票數量", len(selected_stocks))
+                
+                with col2:
+                    st.metric("股票列表", ", ".join(selected_stocks))
+                
+                with col3:
+                    final_value = results['最終價值']
+                    profit = final_value - results['初始資本']
+                    st.metric("最終價值", f"${final_value:,.0f}", 
+                            delta=f"${profit:,.0f}")
+                
+                with col4:
+                    st.metric("總報酬率", f"{results['總報酬率%']:.2f}%")
+                
+                col5, col6, col7 = st.columns(3)
+                
+                with col5:
+                    st.metric("最大虧損", f"{results['最大虧損%']:.2f}%")
+                
+                with col6:
+                    st.metric("勝率", f"{results['勝率%']:.2f}%")
+                
+                with col7:
+                    st.metric("交易次數", results['總交易次數'])
+                
+                # 組合淨值曲線
+                st.subheader("📈 組合淨值曲線")
+                
+                portfolio_df = results['組合淨值曲線']
+                
+                fig = go.Figure()
+                
+                fig.add_trace(go.Scatter(
+                    x=portfolio_df['日期'],
+                    y=portfolio_df['組合總值'],
+                    name='組合總值',
+                    line=dict(color='green', width=2)
+                ))
+                
+                fig.update_layout(
+                    title=f"組合淨值曲線 ({', '.join(selected_stocks)})",
+                    yaxis_title="價值 ($)",
+                    xaxis_title="日期",
+                    template="plotly_white",
+                    height=400,
+                    hovermode='x unified'
+                ))
+                
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # 交易清單
+                if results['交易清單']:
+                    st.subheader("📋 交易清單")
+                    trades_df = pd.DataFrame(results['交易清單'])
+                    st.dataframe(trades_df, use_container_width=True, hide_index=True)
+                
+            except Exception as e:
+                st.error(f"回測失敗：{str(e)}")
+
+
+# ============================================================================
 # 頁腳
 # ============================================================================
 
 st.divider()
 st.markdown("""
 ---
-**股市觀察工具** v1.0 | 數據來源: 台灣證券交易所 | 僅供分析參考，不構成投資建議
+**股市觀察工具** v1.0 | 數據來源：台灣證券交易所 | 僅供分析參考，不構成投資建議
 """)
