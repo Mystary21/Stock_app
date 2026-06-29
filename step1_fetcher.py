@@ -44,101 +44,137 @@ def init_db():
     conn.commit()
     return conn
 
+def fetch_with_retry(url, max_retries=5, base_delay=3, backoff=2, max_delay=30,
+                     headers=None, timeout=10):
+    """
+    帶指數退避重試的 HTTP 請求。
+
+    Args:
+        url: 請求 URL
+        max_retries: 最大重試次數
+        base_delay: 基礎等待秒數
+        backoff: 每次重試的倍數
+        max_delay: 最大等待秒數
+        headers: HTTP headers
+        timeout: 請求超時秒數
+
+    Returns:
+        (response, status) tuple
+    """
+    for attempt in range(max_retries + 1):
+        try:
+            if headers is None:
+                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            res = requests.get(url, headers=headers, timeout=timeout)
+            return res, res.status_code
+        except Exception as e:
+            if attempt == max_retries:
+                print(f"[Error] 請求 {url[:60]}... 失敗 ({e})")
+                return None, -1
+            wait = min(base_delay * (backoff ** attempt), max_delay)
+            print(f"[Retry {attempt+1}/{max_retries}] 等待 {wait} 秒後重試...")
+            time.sleep(wait)
+
+    return None, -1
+
+
 def fetch_twse_data(date_str):
-    """從 TWSE 抓取上市股票資料"""
+    """從 TWSE 抓取上市股票資料（帶指數退避重試）"""
     twse_date = date_str.replace('-', '')
     url = f"https://www.twse.com.tw/exchangeReport/MI_INDEX?response=json&date={twse_date}&type=ALLBUT0999"
-    
-    try:
-        time.sleep(random.uniform(3.5, 5.5))
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-        res = requests.get(url, headers=headers, timeout=10)
-        
-        if 'application/json' not in res.headers.get('Content-Type', ''):
-            print(f"\n[Warning] {date_str} TWSE 回傳非 JSON 格式")
-            return "error", None
-            
-        res_json = res.json()
-        
-        if res_json.get('stat') != 'OK':
-            return "no_data", None
-            
-        return "success", res_json
-        
-    except Exception as e:
-        print(f"\n[Error] {date_str} TWSE 抓取失敗: {e}")
+
+    res, status_code = fetch_with_retry(url, max_retries=5, base_delay=3, backoff=2,
+                                        timeout=30)
+    if res is None:
         return "error", None
 
-def fetch_tpex_data(date_str, sleep_range=(3.5, 5.5)):
+    if status_code != 200:
+        print(f"\n[Error] {date_str} TWSE 回傳 HTTP {status_code}")
+        return "error", None
+
+    if 'application/json' not in res.headers.get('Content-Type', ''):
+        print(f"\n[Warning] {date_str} TWSE 回傳非 JSON 格式")
+        return "no_data", None
+
+    try:
+        res_json = res.json()
+    except Exception:
+        return "error", None
+
+    if res_json.get('stat') != 'OK':
+        return "no_data", None
+
+    return "success", res_json
+
+def fetch_tpex_data(date_str, max_retries=5, base_delay=3, backoff=2, max_delay=30):
     """
-    從 TPEx (櫃買中心) 抓取上櫃股票資料。
+    從 TPEx (櫃買中心) 抓取上櫃股票資料（帶指數退避重試）。
     TPEx API 以「日」為回傳單位 (tables 陣列)，直接抓取指定日期即可。
     回傳格式與 TWSE 相容 (fields9/data9)。
 
     Args:
         date_str: 日期字串 YYYY-MM-DD
-        sleep_range: API 呼叫前等待的秒數範圍 (預設 3.5~5.5)
+        max_retries: 最大重試次數
+        base_delay: 基礎等待秒數
+        backoff: 每次重試的倍數
+        max_delay: 最大等待秒數
     """
     twse_date = date_str.replace('-', '')
     dt = datetime.strptime(date_str, '%Y-%m-%d')
     url = (f"https://www.tpex.org.tw/web/stock/aftertrading/"
            f"daily_close_quotes/stk_quote_result.php"
            f"?l=zh-tw&d={dt.year}/{dt.month:02d}/{dt.day:02d}&stk=ALL&s=0,asc,1")
-    max_retries = 3
-    for attempt in range(1, max_retries + 1):
-        try:
-            time.sleep(random.uniform(*sleep_range))
-            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-            res = requests.get(url, headers=headers, timeout=30, verify=False)
-            if 'application/json' not in res.headers.get('Content-Type', ''):
-                return "no_data", None
-            raw = res.json()
-            if str(raw.get('stat', '')).lower() != 'ok':
-                return "no_data", None
 
-            # TPEx 回傳格式: { tables: [{ fields, data, ... }] }
-            tables = raw.get('tables', [])
-            if not tables:
-                return "no_data", None
+    res, status_code = fetch_with_retry(url, max_retries=max_retries, base_delay=base_delay,
+                                        backoff=backoff, max_delay=max_delay, timeout=30)
+    if res is None or status_code != 200:
+        return "error", None
 
-            # 找第一個有 代號/名稱 欄位的 table
-            for tbl in tables:
-                raw_fields = [str(c).strip() for c in tbl.get('fields', [])]
-                if not any('代號' in f for f in raw_fields):
-                    continue
-                all_rows = tbl.get('data', [])
-                if not all_rows:
-                    continue
+    if 'application/json' not in res.headers.get('Content-Type', ''):
+        return "no_data", None
 
-                # 建立欄位對應: TPEx 原生欄位 → 標準欄位
-                remap = {
-                    '代號': '證券代號', '名稱': '證券名稱',
-                    '收盤': '收盤價', '開盤': '開盤價',
-                    '最高': '最高價', '最低': '最低價',
-                    '漲跌': '漲跌價差',  # TPEx 的漲跌是帶正負號的文字
-                    '成交股數': '成交股數', '成交金額(元)': '成交金額',
-                    '成交金額': '成交金額', '成交筆數': '成交筆數',
-                    '本益比': '本益比',
-                }
-                mapped_fields = []
-                for f in raw_fields:
-                    mapped = next((v for k, v in remap.items() if k in f), f)
-                    if mapped not in mapped_fields:  # 去除重複 (如兩個開盤)
-                        mapped_fields.append(mapped)
+    try:
+        raw = res.json()
+    except Exception:
+        return "error", None
 
-                result = {'fields9': mapped_fields, 'data9': all_rows}
-                return "success", result
+    if str(raw.get('stat', '')).lower() != 'ok':
+        return "no_data", None
 
-            return "no_data", None
+    # TPEx 回傳格式: { tables: [{ fields, data, ... }] }
+    tables = raw.get('tables', [])
+    if not tables:
+        return "no_data", None
 
-        except Exception as e:
-            if attempt < max_retries:
-                wait = 10 * attempt
-                print(f"\n[Retry {attempt}/{max_retries}] {date_str} 錯誤: {e}，等待 {wait} 秒後重試...")
-                time.sleep(wait)
-            else:
-                print(f"\n[Error] {date_str} TPEx 抓取失敗 (已重試 {max_retries} 次): {e}")
-                return "error", None
+    # 找第一個有 代號/名稱 欄位的 table
+    for tbl in tables:
+        raw_fields = [str(c).strip() for c in tbl.get('fields', [])]
+        if not any('代號' in f for f in raw_fields):
+            continue
+        all_rows = tbl.get('data', [])
+        if not all_rows:
+            continue
+
+        # 建立欄位對應: TPEx 原生欄位 → 標準欄位
+        remap = {
+            '代號': '證券代號', '名稱': '證券名稱',
+            '收盤': '收盤價', '開盤': '開盤價',
+            '最高': '最高價', '最低': '最低價',
+            '漲跌': '漲跌價差',  # TPEx 的漲跌是帶正負號的文字
+            '成交股數': '成交股數', '成交金額(元)': '成交金額',
+            '成交金額': '成交金額', '成交筆數': '成交筆數',
+            '本益比': '本益比',
+        }
+        mapped_fields = []
+        for f in raw_fields:
+            mapped = next((v for k, v in remap.items() if k in f), f)
+            if mapped not in mapped_fields:  # 去除重複 (如兩個開盤)
+                mapped_fields.append(mapped)
+
+        result = {'fields9': mapped_fields, 'data9': all_rows}
+        return "success", result
+
+    return "no_data", None
 
 def backfill_otc(recent_days: int = 0, sleep_range=(3.5, 5.5), min_year: int = 0):
     """
@@ -177,11 +213,11 @@ def backfill_otc(recent_days: int = 0, sleep_range=(3.5, 5.5), min_year: int = 0
         '成交金額': '成交金額', '成交筆數': '成交筆數',
         '本益比': '本益比',
     }
-    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     fetched = 0
 
     for raw_date in tqdm(missing, desc="補抓 OTC"):
-        status, data = fetch_tpex_data(f"{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:8]}", sleep_range=sleep_range)
+        date_str = f"{raw_date[:4]}-{raw_date[4:6]}-{raw_date[6:8]}"
+        status, data = fetch_tpex_data(date_str)
         if status == "success" and data is not None:
             with open(STAGING_DIR / f"OTC_{raw_date}.json", 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False)
@@ -218,9 +254,7 @@ def main():
         return
         
     print(f"準備抓取 {len(tasks)} 天的資料（上市 + 上櫃）...")
-    
-    consecutive_errors = 0
-    
+
     for date_str in tqdm(tasks):
         # ── 1. 上市 ──
         twse_status, twse_json = fetch_twse_data(date_str)
@@ -228,12 +262,8 @@ def main():
             save_path = STAGING_DIR / f"{date_str.replace('-', '')}.json"
             with open(save_path, 'w', encoding='utf-8') as f:
                 json.dump(twse_json, f, ensure_ascii=False)
-            consecutive_errors = 0
         elif twse_status == "error":
-            consecutive_errors += 1
-            if consecutive_errors >= 5:
-                print("\n[中斷] 連續 5 次錯誤，可能被 TWSE 暫時封鎖。")
-                break
+            print(f"\n[!] {date_str} TWSE 抓取最終失敗")
 
         # ── 2. 上櫃 (TPEx) ──
         otc_status, otc_json = fetch_tpex_data(date_str)
