@@ -907,32 +907,48 @@ elif page == "🎯 回測策略":
                     st.metric("勝率", f"{results['勝率%']:.2f}%")
                 
                 with col7:
-                    st.metric("交易次數", results['總交易次數'])
+                st.metric("交易次數", results['總交易次數'])
                 
-                # 組合淨值曲線
+                  # 風險調整指標
+                  col8, col9, col10 = st.columns(3)
+                  risk_metrics = results.get('風險指標', {})
+                
+                  with col8:
+                      sharpe = risk_metrics.get('sharpe_ratio', 0)
+                      st.metric("Sharpe 比率", f"{sharpe:.4f}")
+                
+                  with col9:
+                      sortino = risk_metrics.get('sortino_ratio', 0)
+                      st.metric("Sortino 比率", f"{sortino:.4f}")
+                
+                  with col10:
+                      calmar = risk_metrics.get('calmar_ratio', 0)
+                      st.metric("Calmar 比率", f"{calmar:.4f}")
+                
+                  # 組合淨值曲線
                 st.subheader("📈 組合淨值曲線")
                 
-                portfolio_df = results['組合淨值曲線']
+                  portfolio_df = results['組合淨值曲線']
                 
-                fig = go.Figure()
+                  fig = go.Figure()
                 
-                fig.add_trace(go.Scatter(
-                    x=portfolio_df['日期'],
-                    y=portfolio_df['組合總值'],
-                    name='組合總值',
-                    line=dict(color='green', width=2)
-                ))
+                  fig.add_trace(go.Scatter(
+                      x=portfolio_df['日期'],
+                      y=portfolio_df['組合總值'],
+                      name='組合總值',
+                      line=dict(color='green', width=2)
+                  ))
                 
-                fig.update_layout(
-                    title=f"{stock_id} 組合淨值曲線",
-                    yaxis_title="價值 ($)",
-                    xaxis_title="日期",
-                    template="plotly_white",
-                    height=400,
-                    hovermode='x unified'
-                ))
+                  fig.update_layout(
+                      title=f"{stock_id} 組合淨值曲線",
+                      yaxis_title="價值 ($)",
+                      xaxis_title="日期",
+                      template="plotly_white",
+                      height=400,
+                      hovermode='x unified'
+                  ))
                 
-                st.plotly_chart(fig, use_container_width=True)
+                  st.plotly_chart(fig, use_container_width=True)
                 
                 # 交易清單
                 if results['交易清單']:
@@ -1024,9 +1040,25 @@ elif mode == "多股組合回測":
                     st.metric("勝率", f"{results['勝率%']:.2f}%")
                 
                 with col7:
-                    st.metric("交易次數", results['總交易次數'])
+                st.metric("交易次數", results['總交易次數'])
                 
-                # 組合淨值曲線
+                  # 風險調整指標
+                  col8, col9, col10 = st.columns(3)
+                  risk_metrics = results.get('風險指標', {})
+                
+                  with col8:
+                      sharpe = risk_metrics.get('sharpe_ratio', 0)
+                      st.metric("Sharpe 比率", f"{sharpe:.4f}")
+                
+                  with col9:
+                      sortino = risk_metrics.get('sortino_ratio', 0)
+                      st.metric("Sortino 比率", f"{sortino:.4f}")
+                
+                  with col10:
+                      calmar = risk_metrics.get('calmar_ratio', 0)
+                      st.metric("Calmar 比率", f"{calmar:.4f}")
+                
+                  # 組合淨值曲線
                 st.subheader("📈 組合淨值曲線")
                 
                 portfolio_df = results['組合淨值曲線']

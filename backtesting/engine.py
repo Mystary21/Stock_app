@@ -365,6 +365,9 @@ class BacktestEngine:
         days = (self.end_date - self.start_date).days if self.start_date and self.end_date else 0
         annual_return = (total_return / max(days, 1) * 365) if days > 0 else 0
         
+        # 計算風險調整指標
+        risk_metrics = RiskMetrics.calculate_risk_metrics(portfolio_df)
+        
         return {
             '模式': '多股組合',
             '股票數量': len(self.stock_ids),
@@ -379,6 +382,7 @@ class BacktestEngine:
             '虧損交易': total_trades_count - win_trades,
             '勝率%': round(win_rate, 2),
             '回測天數': days,
+            '風險指標': risk_metrics,
             '交易清單': self.trades,
             '組合淨值曲線': portfolio_df,
         }
@@ -476,7 +480,81 @@ class StrategyLibrary:
         
         if macd > signal:
             return {'action': 'BUY', 'confidence': 0.7}
-        elif macd < signal:
+        el       if macd < signal:
             return {'action': 'SELL', 'confidence': 0.7}
         else:
             return {'action': 'HOLD', 'confidence': 0}
+
+
+# 風險調整指標計算
+class RiskMetrics:
+    """風險調整績效指標計算"""
+    
+    @staticmethod
+    def calculate_risk_metrics(portfolio_df: pd.DataFrame, risk_free_rate: float = 0.02) -> Dict:
+        """
+        計算風險調整績效指標
+        
+        Args:
+            portfolio_df: 組合淨值曲線 DataFrame
+            risk_free_rate: 無風險利率（預設 2%）
+        
+        Returns:
+            dict: {
+                'sharpe_ratio': Sharpe 比率,
+                'sortino_ratio': Sortino 比率,
+                'calmar_ratio': Calmar 比率,
+                'annualized_return': 年化報酬率,
+                'max_drawdown': 最大虧損,
+            }
+        """
+        if portfolio_df.empty:
+            return {}
+        
+        # 計算每日報酬率
+        daily_returns = portfolio_df['組合總值'].pct_change().dropna()
+        
+        if daily_returns.empty or len(daily_returns) < 2:
+            return {
+                'sharpe_ratio': 0,
+                'sortino_ratio': 0,
+                'calmar_ratio': 0,
+                'annualized_return': 0,
+                'max_drawdown': 0,
+            }
+        
+        # 年化報酬率
+        mean_daily_return = daily_returns.mean()
+        annualized_return = (1 + mean_daily_return) ** (252) - 1
+        
+        # Sharpe 比率
+        if daily_returns.std() > 0:
+            sharpe_ratio = (mean_daily_return - risk_free_rate / 252) / (daily_returns.std() / np.sqrt(252))
+        else:
+            sharpe_ratio = 0
+        
+        # Sortino 比率（只考慮下行波動）
+        downside_returns = daily_returns[daily_returns < 0]
+        if len(downside_returns) > 0 and downside_returns.std() > 0:
+            downside_volatility = downside_returns.std() / np.sqrt(252)
+            sortino_ratio = (mean_daily_return - risk_free_rate / 252) / downside_volatility
+        else:
+            sortino_ratio = 0
+        
+        # Calmar 比率
+        portfolio_series = portfolio_df['組合總值']
+        cummax = portfolio_series.cummax()
+        max_drawdown = ((portfolio_series - cummax) / cummax).min()
+        
+        if max_drawdown < 0:
+            calmar_ratio = annualized_return / abs(max_drawdown)
+        else:
+            calmar_ratio = 0
+        
+        return {
+            'sharpe_ratio': round(sharpe_ratio, 4),
+            'sortino_ratio': round(sortino_ratio, 4),
+            'calmar_ratio': round(calmar_ratio, 4),
+            'annualized_return': round(annualized_return * 100, 2),
+            'max_drawdown': round(max_drawdown * 100, 2),
+        }
