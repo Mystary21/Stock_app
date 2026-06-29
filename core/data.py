@@ -682,6 +682,111 @@ class StockDataQuery:
             return count
         except Exception:
             return 0
+    
+    # ================== 除權息價格調整 ==================
+    
+    def get_adjusted_prices(self, stock_id: str, start_date: Optional[str] = None, 
+                           end_date: Optional[str] = None) -> pd.DataFrame:
+        """
+        取得經除權息調整後的價格
+        
+        Args:
+            stock_id: 股票代號
+            start_date: 開始日期 (YYYY-MM-DD)
+            end_date: 結束日期 (YYYY-MM-DD)
+        
+        Returns:
+            DataFrame: 調整後的價格數據
+        """
+        # 取得原始價格
+        original_df = self.get_stock_price_history(stock_id, start_date, end_date)
+        
+        if original_df.empty:
+            return original_df
+        
+        # 取得除權息事件
+        dividend_df = self.get_dividend_history(stock_id)
+        
+        if dividend_df.empty:
+            return original_df
+        
+        # 建立除權息事件字典
+        dividends = {}
+        for _, row in dividend_df.iterrows():
+            ex_date = str(row['除權息日期'])
+            cash_dividend = float(row['現金股利']) if pd.notna(row['現金股利']) else 0
+            stock_dividend = float(row['股票股利']) if pd.notna(row['股票股利']) else 0
+            
+            dividends[ex_date] = {
+                'cash_dividend': cash_dividend,
+                'stock_dividend': stock_dividend,
+            }
+        
+        # 計算調整係數
+        adjustment_factors = {}
+        for ex_date, div in dividends.items():
+            adjustment_factors[ex_date] = (1 + div['cash_dividend']) * (1 + div['stock_dividend'])
+        
+        # 應用調整
+        adjusted_df = original_df.copy()
+        
+        for idx, row in adjusted_df.iterrows():
+            price_date = str(row['日期'])
+            current_factor = 1.0
+            
+            # 檢查是否有除權息事件
+            for ex_date, factor in adjustment_factors.items():
+                if ex_date <= price_date:
+                    current_factor *= factor
+            
+            if current_factor > 1:
+                adjusted_df.at[idx, '調整後價格'] = row['收盤價'] / current_factor
+        
+        return adjusted_df
+    
+    def adjust_price_series(self, price_series: pd.Series, stock_id: str, 
+                          start_date: Optional[str] = None,
+                          end_date: Optional[str] = None) -> pd.Series:
+        """
+        調整價格序列（除權息調整）
+        
+        Args:
+            price_series: 價格序列
+            stock_id: 股票代號
+            start_date: 開始日期
+            end_date: 結束日期
+        
+        Returns:
+            pd.Series: 調整後的價格序列
+        """
+        df = self.get_adjusted_prices(stock_id, start_date, end_date)
+        
+        if df.empty:
+            return price_series
+        
+        # 建立日期到調整係數的映射
+        adjustment_map = {}
+        dividend_df = self.get_dividend_history(stock_id)
+        
+        for _, row in dividend_df.iterrows():
+            ex_date = str(row['除權息日期'])
+            cash_dividend = float(row['現金股利']) if pd.notna(row['現金股利']) else 0
+            stock_dividend = float(row['股票股利']) if pd.notna(row['股票股利']) else 0
+            factor = (1 + cash_dividend) * (1 + stock_dividend)
+            adjustment_map[ex_date] = factor
+        
+        # 應用調整
+        adjusted = price_series.copy()
+        
+        for date, price in zip(df['日期'], df['調整後價格']):
+            date_str = str(date)
+            if date_str in adjustment_map:
+                # 找出這個日期之後的原始價格，除以調整係數
+                mask = df['日期'] >= date
+                if mask.any():
+                    adjusted.iloc[mask] /= adjustment_map[date_str]
+        
+        return adjusted
 
 
 # 創建全局實例

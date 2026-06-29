@@ -9,7 +9,8 @@ class BacktestEngine:
     """簡易的股票策略回測引擎"""
     
     def __init__(self, stock_ids: Optional[List[str]] = None, start_date: Optional[str] = None, 
-                 end_date: Optional[str] = None, initial_capital: float = 100000):
+                 end_date: Optional[str] = None, initial_capital: float = 100000,
+                 adjust_prices: bool = False):
         """
         初始化回測引擎
         
@@ -18,6 +19,7 @@ class BacktestEngine:
             start_date: 回測開始日期 (YYYY-MM-DD)
             end_date: 回測結束日期 (YYYY-MM-DD)
             initial_capital: 初始資本額
+            adjust_prices: 是否應用除權息調整
         """
         if stock_ids is None:
             stock_ids = [stock_id]
@@ -26,9 +28,14 @@ class BacktestEngine:
         self.start_date = start_date
         self.end_date = end_date
         self.initial_capital = initial_capital
+        self.adjust_prices = adjust_prices
         
         # 取得所有股票數據
         self.multi_data = data_query.get_multi_stock_prices(stock_ids, start_date, end_date)
+        
+        # 如果啟用除權息調整，應用調整
+        if adjust_prices:
+            self._apply_price_adjustments()
         
         if not self.multi_data:
             raise ValueError("無法取得任何股票的數據")
@@ -53,12 +60,29 @@ class BacktestEngine:
             if stock_id not in self.multi_data:
                 continue
             
-            # 複製技術指標
+             # 複製技術指標
             for col in ['SMA_20', 'SMA_50', 'RSI_14', 'MACD', 'MACD_Signal']:
                 if col in analyzer.df.columns:
                     self.multi_data[stock_id][col] = analyzer.df[col].values
     
-    def add_signal(self, signal_func: Callable[[pd.DataFrame, int], Dict]) -> 'BacktestEngine':
+    def _apply_price_adjustments(self):
+        """應用除權息價格調整"""
+        if not self.adjust_prices:
+            return
+        
+        for stock_id in self.stock_ids:
+            if stock_id not in self.multi_data:
+                continue
+            
+            try:
+                adjusted_df = data_query.get_adjusted_prices(stock_id, self.start_date, self.end_date)
+                
+                if not adjusted_df.empty and '調整後價格' in adjusted_df.columns:
+                    self.multi_data[stock_id]['調整後價格'] = adjusted_df['調整後價格'].values
+            except Exception:
+                pass  # 除權息調整失敗時忽略
+        
+        def add_signal(self, signal_func: Callable[[pd.DataFrame, int], Dict]) -> 'BacktestEngine':
         """
         添加交易信號函數
         
@@ -102,9 +126,12 @@ class BacktestEngine:
         cash = self.initial_capital
         shares = 0
         
+        # 決定使用調整後價格 or 原始價格
+        use_adjusted = self.adjust_prices and '調整後價格' in df.columns
+        
         for i in range(len(df)):
             row = df.iloc[i]
-            current_price = row['收盤價']
+            current_price = row['調整後價格'] if use_adjusted else row['收盤價']
             current_date = row['日期']
             
             # 生成信號
@@ -213,9 +240,12 @@ class BacktestEngine:
             entry_price = None
             entry_date = None
             
+            # 決定使用調整後價格 or 原始價格
+            use_adjusted = self.adjust_prices and '調整後價格' in df.columns
+            
             for i in range(len(df)):
                 row = df.iloc[i]
-                current_price = row['收盤價']
+                current_price = row['調整後價格'] if use_adjusted else row['收盤價']
                 current_date = row['日期']
                 
                 signal = self.signal_func(df, i)
