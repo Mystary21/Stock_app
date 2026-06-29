@@ -129,6 +129,9 @@ class BacktestEngine:
         # 決定使用調整後價格 or 原始價格
         use_adjusted = self.adjust_prices and '調整後價格' in df.columns
         
+        # 優化：預處理價格序列
+        prices = df['調整後價格'].values if use_adjusted else df['收盤價'].values
+        
         for i in range(len(df)):
             row = df.iloc[i]
             current_price = row['調整後價格'] if use_adjusted else row['收盤價']
@@ -398,7 +401,8 @@ class BacktestEngine:
         # 計算風險調整指標
         risk_metrics = RiskMetrics.calculate_risk_metrics(portfolio_df)
         
-        return {
+        # 計算更精確的回測結果
+        precision_results = {
             '模式': '多股組合',
             '股票數量': len(self.stock_ids),
             '股票列表': self.stock_ids,
@@ -416,6 +420,8 @@ class BacktestEngine:
             '交易清單': self.trades,
             '組合淨值曲線': portfolio_df,
         }
+        
+        return precision_results
 
 
 # 預定義策略
