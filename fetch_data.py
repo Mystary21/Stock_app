@@ -1,6 +1,6 @@
-#!/usr/bin/env python3
+# fetch_data.py - 一鍵資料抓取 + 清洗 + 入庫
 """
-fetch_data.py - 一鍵資料抓取 + 清洗 + 入庫
+fetch_data.py - 資料抓取流程 orchestrator
 
 用法:
     python fetch_data.py                     # 抓取到今天 (增量 ETL)
@@ -14,15 +14,13 @@ fetch_data.py - 一鍵資料抓取 + 清洗 + 入庫
 import argparse
 import sys
 import time
+import sqlite3
 from datetime import datetime
 from pathlib import Path
 
 
 def sync_staging_to_db():
     """將 staging/ 已有的 JSON 自動標記為 success，避免重複下載"""
-    import sqlite3
-    from pathlib import Path
-
     conn = sqlite3.connect('task_status.db')
     cursor = conn.cursor()
 
@@ -45,6 +43,14 @@ def sync_staging_to_db():
         print(f'   [同步] 已將 {updated} 個現有 JSON 標記為 success')
 
 
+# ================== API 客戶端 ==================
+
+from api_client import TWSEClient, TPExClient
+
+twse_client = TWSEClient()
+tpex_client = TPExClient()
+
+
 def run_fetcher(start_date: str, end_date: str):
     """執行 Step 1: 資料抓取"""
     print("\n" + "=" * 60)
@@ -52,17 +58,7 @@ def run_fetcher(start_date: str, end_date: str):
     print(f"   日期範圍: {start_date} → {end_date}")
     print("=" * 60)
 
-    # 動態覆寫 step1 的常數，再呼叫其邏輯
-    import step1_fetcher as s1
-    import sqlite3
-    import pandas as pd
-
-    s1.START_DATE = start_date
-    s1.END_DATE = end_date
-
-    # 重新初始化 DB（補入新的日期任務）
-    conn = s1.init_db()
-    sync_staging_to_db()  # 將已有 JSON 同步為 success
+    conn = sqlite3.connect('task_status.db')
     cursor = conn.cursor()
 
     cursor.execute(
@@ -78,22 +74,17 @@ def run_fetcher(start_date: str, end_date: str):
     print(f"\n準備抓取 {len(tasks)} 天的資料...")
 
     from tqdm import tqdm
-    consecutive_errors = 0
 
     for date_str in tqdm(tasks, desc="抓取進度"):
-        status, raw_json_data = s1.fetch_twse_data(date_str)
+        status, raw_json_data = twse_client.fetch(date_str)
 
         if status == "success" and raw_json_data is not None:
-            save_path = s1.STAGING_DIR / f"{date_str.replace('-', '')}.json"
+            save_path = Path('staging') / f"{date_str.replace('-', '')}.json"
             import json
             with open(save_path, 'w', encoding='utf-8') as f:
                 json.dump(raw_json_data, f, ensure_ascii=False)
-            consecutive_errors = 0
         elif status == "error":
-            consecutive_errors += 1
-            if consecutive_errors >= 5:
-                print("\n[中斷] 連續 5 次錯誤，可能被 TWSE 暫時封鎖。請稍後重試。")
-                break
+            print(f"\n[!] {date_str} TWSE 抓取失敗")
 
         cursor.execute(
             "UPDATE fetch_status SET status = ? WHERE date = ?", (status, date_str)
@@ -168,7 +159,7 @@ def main():
     )
     parser.add_argument(
         "--with-fundamentals", action="store_true",
-        help="同時抓取基本面 (產業別/月營收/法說會) 並自動標籤族群"
+        help="同時抓取基本面 (產業別/營收/法說會) 並自動標籤族群"
     )
     parser.add_argument(
         "--fundamentals-only", action="store_true",
@@ -215,11 +206,10 @@ def main():
             run_fundamentals()
 
     elapsed = time.time() - t_start
-    mins, secs = divmod(int(elapsed), 60)
 
     print(f"""
 ╔══════════════════════════════════════════════════╗
-║  ✅ 全部完成！耗時 {mins:02d}:{secs:02d}                        ║
+║  ✅ 全部完成！耗時 {int(elapsed // 60):02d}:{elapsed % 60:02d}                        ║
 ║                                                  ║
 ║  啟動儀表板:                                      ║
 ║    python main.py web --port 8503                ║
