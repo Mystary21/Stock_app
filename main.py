@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-股市觀察工具 - 主入口
+股市觀察工具 - 主入口 (P3-3: 檔案路徑處理)
 
 功能：
-1. 單檔股票分析 (K線、技術指標)
+1. 單檔股票分析 (K 線、技術指標)
 2. 族群比較分析 (產業內對比)
 3. 選股篩選 (多條件篩選)
 4. 量化策略回測
@@ -13,88 +13,142 @@
     python main.py stock 2330        # 查詢單檔股票
     python main.py industry 半導體   # 查詢產業數據
     python main.py filter [條件]     # 執行股票篩選
+
+環境變數:
+    STOCK_DB_PATH: 資料庫路徑 (預設：stock_warehouse.db)
+    STOCK_PARQUET_DIR: Parquet 資料夾路徑 (預設：parquet_data)
 """
 
 import sys
 import argparse
 from pathlib import Path
 
+import os
+
 from core.data import data_query
 from core.analysis import StockAnalyzer, IndustryComparison
 from core.filters import StockFilter, PredefinedFilters
 from backtesting.engine import BacktestEngine, StrategyLibrary
 
+# P3-3: 環境變數設定
+DB_PATH = os.getenv("STOCK_DB_PATH", "stock_warehouse.db")
+PARQUET_DIR = Path(os.getenv("STOCK_PARQUET_DIR", "parquet_data"))
+
+# 確保資料夾存在
+PARQUET_DIR.mkdir(parents=True, exist_ok=True)
+
 def print_stock_analysis(stock_id: str):
-    """打印單檔股票分析結果"""
-    stock_info = data_query.get_stock_by_id(stock_id)
-    if not stock_info:
-        print(f"❌ 找不到股票: {stock_id}")
-        return
-    
-    print(f"\n📈 {stock_info['證券名稱']} ({stock_id})")
-    print(f"   產業: {stock_info.get('產業類別', 'N/A')}")
-    print("-" * 50)
-    
-    latest = data_query.get_latest_price(stock_id)
-    if latest:
-        print(f"   收盤價: ${latest['收盤價']:.2f}")
-        print(f"   漲跌: {latest['漲跌']:+.2f}")
-        print(f"   成交股數: {latest['成交股數']:,.0f}")
-        print(f"   成交金額: ${latest['成交金額']:,.0f}")
-    
-    analyzer = StockAnalyzer(stock_id)
-    indicators = analyzer.get_latest_indicators()
-    
-    print("\n   技術指標:")
-    print(f"   - RSI(14): {indicators.get('RSI_14', 'N/A')}")
-    print(f"   - MACD: {indicators.get('MACD', 'N/A')}")
-    print(f"   - SMA20: ${indicators.get('SMA_20', 'N/A'):.2f}")
-    print(f"   - SMA50: ${indicators.get('SMA_50', 'N/A'):.2f}")
-    print(f"   - 波動率: {indicators.get('Volatility', 'N/A')}%")
+    """打印單檔股票分析結果 (P3-1: 錯誤處理與健壯性)"""
+    try:
+        if not stock_id or not isinstance(stock_id, str):
+            print(f"❌ 股票代號格式錯誤：{stock_id}")
+            return
+        
+        stock_info = data_query.get_stock_by_id(stock_id)
+        if not stock_info:
+            print(f"❌ 找不到股票：{stock_id}")
+            return
+        
+        print(f"\n📈 {stock_info['證券名稱']} ({stock_id})")
+        print(f"   產業：{stock_info.get('產業類別', 'N/A')}")
+        print("-" * 50)
+        
+        latest = data_query.get_latest_price(stock_id)
+        if latest:
+            print(f"   收盤價：${latest['收盤價']:.2f}")
+            print(f"   漲跌：{latest['漲跌']:+.2f}")
+            print(f"   成交股數：{latest['成交股數']:,.0f}")
+            print(f"   成交金額：${latest['成交金額']:,.0f}")
+        
+        analyzer = StockAnalyzer(stock_id)
+        indicators = analyzer.get_latest_indicators()
+        
+        print("\n   技術指標:")
+        print(f"   - RSI(14): {indicators.get('RSI_14', 'N/A')}")
+        print(f"   - MACD: {indicators.get('MACD', 'N/A')}")
+        print(f"   - SMA20: ${indicators.get('SMA_20', 'N/A'):.2f}")
+        print(f"   - SMA50: ${indicators.get('SMA_50', 'N/A'):.2f}")
+        print(f"   - 波動率：{indicators.get('Volatility', 'N/A')}%")
+    except ValueError as e:
+        print(f"❌ 參數錯誤：{str(e)}")
+    except KeyError as e:
+        print(f"❌ 資料缺失：{str(e)}")
+    except TypeError as e:
+        print(f"❌ 資料類型錯誤：{str(e)}")
+    except Exception as e:
+        print(f"❌ 分析失敗：{str(e)}")
 
 def print_industry_analysis(industry: str):
-    """打印產業分析結果"""
-    stocks = data_query.get_stocks_by_industry(industry)
-    if stocks.empty:
-        print(f"❌ 找不到產業: {industry}")
+    """打印產業分析結果 (P3-1: 錯誤處理與健壯性)"""
+    try:
+        if not industry or not isinstance(industry, str):
+            print(f"❌ 產業名稱格式錯誤：{industry}")
+            return
+        
+        stocks = data_query.get_stocks_by_industry(industry)
+        if stocks.empty:
+            print(f"❌ 找不到產業：{industry}")
+            return
+    except ValueError as e:
+        print(f"❌ 參數錯誤：{str(e)}")
+        return
+    except KeyError as e:
+        print(f"❌ 資料缺失：{str(e)}")
+        return
+    except Exception as e:
+        print(f"❌ 產業查詢失敗：{str(e)}")
         return
     
-    print(f"\n🏢 {industry} (共 {len(stocks)} 檔股票)")
-    print("-" * 50)
-    
-    stats = IndustryComparison.compare_industry_performance(industry)
-    print(f"   平均收盤價: ${stats.get('平均收盤價', 0):.2f}")
-    print(f"   平均漲跌: {stats.get('平均漲跌', 0):+.2f}")
-    print(f"   上漲股數: {stats.get('上漲股數', 0)}")
-    print(f"   下跌股數: {stats.get('下跌股數', 0)}")
-    
-    print("\n   領頭股 (按成交金額):")
-    leaders = IndustryComparison.get_industry_leaders(industry, '成交金額', 5)
-    for _, row in leaders.iterrows():
-        print(f"   - {row['證券代號']} {row['證券名稱']}: ${row['收盤價']:.2f} ({row['漲跌']:+.2f})")
+    try:
+        print(f"\n🏢 {industry} (共 {len(stocks)} 檔股票)")
+        print("-" * 50)
+        
+        stats = IndustryComparison.compare_industry_performance(industry)
+        print(f"   平均收盤價：${stats.get('平均收盤價', 0):.2f}")
+        print(f"   平均漲跌：{stats.get('平均漲跌', 0):+.2f}")
+        print(f"   上漲股數：{stats.get('上漲股數', 0)}")
+        print(f"   下跌股數：{stats.get('下跌股數', 0)}")
+        
+        print("\n   領頭股 (按成交金額):")
+        leaders = IndustryComparison.get_industry_leaders(industry, '成交金額', 5)
+        for _, row in leaders.iterrows():
+            print(f"   - {row['證券代號']} {row['證券名稱']}: ${row['收盤價']:.2f} ({row['漲跌']:+.2f})")
+    except Exception as e:
+        print(f"❌ 產業分析失敗：{str(e)}")
 
 def print_filter_results(filter_type: str = "bullish"):
-    """打印篩選結果"""
-    print(f"\n🔍 執行篩選: {filter_type}")
-    print("-" * 50)
-    
-    if filter_type == "bullish":
-        result = PredefinedFilters.bullish_signal()
-        print("看漲信號 (黃金交叉 + 價格 > SMA20)")
-    elif filter_type == "oversold":
-        result = PredefinedFilters.oversold_stocks()
-        print("超賣股票 (RSI < 30)")
-    elif filter_type == "overbought":
-        result = PredefinedFilters.overbought_stocks()
-        print("超買股票 (RSI > 70)")
-    else:
-        result = PredefinedFilters.high_volume_gainers()
-        print("成交量大漲股")
-    
-    print(f"\n找到 {len(result)} 檔符合條件的股票:\n")
-    
-    for _, row in result.head(10).iterrows():
-        print(f"   {row['證券代號']} {row['證券名稱']:<15} 收: ${row['收盤價']:>8.2f} 漲: {row['漲跌']:>+7.2f}")
+    """打印篩選結果 (P3-1: 錯誤處理與健壯性)"""
+    try:
+        if not filter_type or not isinstance(filter_type, str):
+            print(f"❌ 篩選類型格式錯誤：{filter_type}")
+            return
+        
+        print(f"\n🔍 執行篩選：{filter_type}")
+        print("-" * 50)
+        
+        if filter_type == "bullish":
+            result = PredefinedFilters.bullish_signal()
+            print("看漲信號 (黃金交叉 + 價格 > SMA20)")
+        elif filter_type == "oversold":
+            result = PredefinedFilters.oversold_stocks()
+            print("超賣股票 (RSI < 30)")
+        elif filter_type == "overbought":
+            result = PredefinedFilters.overbought_stocks()
+            print("超買股票 (RSI > 70)")
+        else:
+            result = PredefinedFilters.high_volume_gainers()
+            print("成交量大漲股")
+        
+        print(f"\n找到 {len(result)} 檔符合條件的股票:\n")
+        
+        for _, row in result.head(10).iterrows():
+            print(f"   {row['證券代號']} {row['證券名稱']:<15} 收：${row['收盤價']:>8.2f} 漲：{row['漲跌']:>+7.2f}")
+    except ValueError as e:
+        print(f"❌ 參數錯誤：{str(e)}")
+    except KeyError as e:
+        print(f"❌ 資料缺失：{str(e)}")
+    except Exception as e:
+        print(f"❌ 篩選執行失敗：{str(e)}")
 
 def main():
     parser = argparse.ArgumentParser(
@@ -157,20 +211,26 @@ def main():
         print_filter_results(args.filter_type)
     
     elif args.command == 'list_industries':
-        print("\n📚 所有產業類別:")
-        print("-" * 50)
-        industries = data_query.get_all_industries()
-        for i, ind in enumerate(industries, 1):
-            print(f"   {i:2d}. {ind}")
+        try:
+            print("\n📚 所有產業類別:")
+            print("-" * 50)
+            industries = data_query.get_all_industries()
+            for i, ind in enumerate(industries, 1):
+                print(f"   {i:2d}. {ind}")
+        except Exception as e:
+            print(f"❌ 產業列表查詢失敗：{str(e)}")
     
     elif args.command == 'list_stocks':
-        print("\n📚 所有股票:")
-        print("-" * 50)
-        stocks = data_query.get_all_stocks()
-        for _, row in stocks.head(20).iterrows():
-            print(f"   {row['證券代號']} {row['證券名稱']:<15} ({row.get('產業類別', 'N/A')})")
-        if len(stocks) > 20:
-            print(f"   ... 還有 {len(stocks) - 20} 檔股票")
+        try:
+            print("\n📚 所有股票:")
+            print("-" * 50)
+            stocks = data_query.get_all_stocks()
+            for _, row in stocks.head(20).iterrows():
+                print(f"   {row['證券代號']} {row['證券名稱']:<15} ({row.get('產業類別', 'N/A')})")
+            if len(stocks) > 20:
+                print(f"   ... 還有 {len(stocks) - 20} 檔股票")
+        except Exception as e:
+            print(f"❌ 股票列表查詢失敗：{str(e)}")
     
     else:
         parser.print_help()

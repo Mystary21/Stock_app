@@ -1,14 +1,21 @@
 # core/data.py - 統一的數據查詢 API 層
 import sqlite3
 import pandas as pd
+import time
 from pathlib import Path
 from typing import List, Tuple, Optional
 import numpy as np
 from contextlib import contextmanager
 
-# 設定路徑
-DB_PATH = "stock_warehouse.db"
-PARQUET_DIR = Path("parquet_data")
+# 設定路徑 (支援環境變數與配置檔)
+import os
+
+# 嘗試從配置檔或環境變數讀取路徑
+DB_PATH = os.getenv("STOCK_DB_PATH", "stock_warehouse.db")
+PARQUET_DIR = Path(os.getenv("STOCK_PARQUET_DIR", "parquet_data"))
+
+# 確保資料夾存在
+PARQUET_DIR.mkdir(parents=True, exist_ok=True)
 
 class StockDataQuery:
     """統一的股票數據查詢引擎"""
@@ -17,6 +24,9 @@ class StockDataQuery:
         self.db_path = DB_PATH
         self.parquet_dir = PARQUET_DIR
         self._connection_pool = None
+        # 快取機制
+        self._cache = {}
+        self._cache_ttl = 300  # 5 分鐘快取
     
     def _get_connection_pool(self):
         """Lazy 初始化連線池"""
@@ -47,16 +57,37 @@ class StockDataQuery:
         except Exception:
             pass  # 連線池異常時忽略
     
+    def _cache_get(self, key):
+        """從快取中取得資料"""
+        if key in self._cache:
+            value, timestamp = self._cache[key]
+            if time.time() - timestamp < self._cache_ttl:
+                return value
+            else:
+                del self._cache[key]
+        return None
+    
+    def _cache_set(self, key, value):
+        """將資料存入快取"""
+        self._cache[key] = (value, time.time())
+    
     # ================== 基礎查詢 ==================
     
     def get_all_stocks(self) -> pd.DataFrame:
         """取得所有股票的基本資訊"""
+        cache_key = "all_stocks"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+        
         conn = self._get_connection()
         try:
             query = "SELECT 證券代號, 證券名稱, 產業類別, 狀態 FROM Company_Dim"
             df = pd.read_sql_query(query, conn)
         finally:
             self._return_connection(conn)
+        
+        self._cache_set(cache_key, df)
         return df
     
     def get_stock_by_id(self, stock_id: str) -> Optional[dict]:
@@ -74,28 +105,43 @@ class StockDataQuery:
     
     def get_stocks_by_industry(self, industry: str) -> pd.DataFrame:
         """根據產業類別取得所有股票"""
+        cache_key = f"industry_{industry}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+        
         conn = self._get_connection()
         try:
             query = "SELECT 證券代號, 證券名稱, 產業類別 FROM Company_Dim WHERE 產業類別 = ?"
             df = pd.read_sql_query(query, conn, params=(industry,))
         finally:
             self._return_connection(conn)
+        
+        self._cache_set(cache_key, df)
         return df
     
     def get_all_industries(self) -> List[str]:
         """取得所有產業類別"""
+        cache_key = "all_industries"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+        
         conn = self._get_connection()
         try:
             query = "SELECT DISTINCT 產業類別 FROM Company_Dim WHERE 產業類別 IS NOT NULL ORDER BY 產業類別"
             df = pd.read_sql_query(query, conn)
         finally:
             self._return_connection(conn)
-        return df['產業類別'].tolist()
+        
+        result = df['產業類別'].tolist()
+        self._cache_set(cache_key, result)
+        return result
     
     # ================== 歷史價格數據 ==================
     
-    def get_stock_price_history(self, stock_id: str, start_date: Optional[str] = None, 
-                               end_date: Optional[str] = None) -> pd.DataFrame:
+  def get_stock_price_history(self, stock_id: str, start_date: Optional[str] = None, 
+                              end_date: Optional[str] = None) -> pd.DataFrame:
         """
         取得單檔股票的歷史價格數據
         
@@ -107,10 +153,18 @@ class StockDataQuery:
         Returns:
             DataFrame: 包含日期、開盤、高、低、收、成交股數、成交金額的資料
         """
+        # 快取 key
+        cache_key = f"price_{stock_id}_{start_date}_{end_date}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+        
         parquet_path = self.parquet_dir / f"{stock_id}.parquet"
         
         if not parquet_path.exists():
-            return pd.DataFrame()
+            result = pd.DataFrame()
+            self._cache_set(cache_key, result)
+            return result
         
         try:
             df = pd.read_parquet(parquet_path)
@@ -127,20 +181,30 @@ class StockDataQuery:
             # 按日期升序排列
             df = df.sort_values('日期').reset_index(drop=True)
             
+            self._cache_set(cache_key, df)
             return df
         except Exception as e:
             print(f"讀取 {stock_id} 的 Parquet 檔案失敗: {e}")
-            return pd.DataFrame()
+            result = pd.DataFrame()
+            self._cache_set(cache_key, result)
+            return result
     
     def get_latest_price(self, stock_id: str) -> Optional[dict]:
         """取得最新一天的股票價格"""
+        cache_key = f"latest_{stock_id}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+        
         df = self.get_stock_price_history(stock_id)
         
         if df.empty:
-            return None
+            result = None
+            self._cache_set(cache_key, result)
+            return result
         
         latest = df.iloc[-1]
-        return {
+        price_info = {
             '日期': str(latest['日期'].date()),
             '開盤價': latest['開盤價'],
             '最高價': latest['最高價'],
@@ -150,6 +214,8 @@ class StockDataQuery:
             '成交股數': latest['成交股數'],
             '成交金額': latest['成交金額'],
         }
+        self._cache_set(cache_key, price_info)
+        return price_info
     
     # ================== 基本面分析 ==================
     
@@ -163,6 +229,11 @@ class StockDataQuery:
         Returns:
             dict: 基本面指標，或 None
         """
+        cache_key = f"fund_{stock_id}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+        
         try:
             conn = self._get_connection()
             try:
@@ -206,10 +277,12 @@ class StockDataQuery:
                 self._return_connection(conn)
             
             if df.empty:
-                return None
+                result = None
+                self._cache_set(cache_key, result)
+                return result
             
             row = df.iloc[0]
-            return {
+            fundamentals = {
                 '證券代號': row['證券代號'],
                 '證券名稱': row['證券名稱'],
                 'pe_ratio': row['pe_ratio'],
@@ -223,8 +296,12 @@ class StockDataQuery:
                 'bps': row['bps'],
                 'close_price': row['close_price'],
             }
+            self._cache_set(cache_key, fundamentals)
+            return fundamentals
         except Exception:
-            return None
+            result = None
+            self._cache_set(cache_key, result)
+            return result
     
     # ================== 批量查詢 ==================
     
@@ -250,6 +327,11 @@ class StockDataQuery:
         
         如果未指定日期，取得最新一天的資料
         """
+        cache_key = f"snap_{industry}_{date}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+        
         # 先取得該產業的所有股票
         stocks_df = self.get_stocks_by_industry(industry)
         stock_ids = stocks_df['證券代號'].tolist()
@@ -274,7 +356,9 @@ class StockDataQuery:
                 row['證券名稱'] = stocks_df[stocks_df['證券代號'] == stock_id]['證券名稱'].values[0]
                 results.append(row)
         
-        return pd.DataFrame(results) if results else pd.DataFrame()
+        result = pd.DataFrame(results) if results else pd.DataFrame()
+        self._cache_set(cache_key, result)
+        return result
     
     # ================== 除權息事件 ==================
     

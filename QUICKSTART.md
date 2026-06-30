@@ -1,6 +1,6 @@
-#  快速入門指南
+# 快速入門指南
 
-##  前置條件
+## 前置條件
 
 ✅ 已完成 **數據初始化**:
 - 已執行 `python fetch_data.py` 完成資料抓取與入庫
@@ -13,7 +13,7 @@
 
 ---
 
-##  一分鐘快速開始
+## 一分鐘快速開始
 
 ### 1. 安裝依賴
 
@@ -27,13 +27,13 @@ pip install -r requirements.txt
 python main.py web --port 8503
 ```
 
-瀏覽器自動打開: `http://localhost:8503`
+瀏覽器自動打開：`http://localhost:8503`
 
 ---
 
-##  儀表板功能導覽
+## 儀表板功能導覽
 
-###  側邊欄
+### 側邊欄
 
 | 頁面 | 說明 |
 |------|------|
@@ -43,53 +43,12 @@ python main.py web --port 8503
 | **族群分析** | 自訂標籤管理（建立/刪除/批次貼標） |
 | **選股篩選** | 預定義篩選 + 自訂多條件篩選 |
 | **回測策略** | SMA/RSI/MACD 策略回測 |
-
-###  族群分析（新功能）
-
-```
-操作步驟:
-  1. 在輸入框輸入族群名稱 → 按 Enter 建立
-  2. 搜尋框打關鍵字（如「穩懋」、「半導體」）過濾股票
-  3. 勾選股票 → 按「批次設定標籤」完成貼標
-  4. 按 ✕ 刪除標籤
-
-特色:
-  - 即時持久化（重整頁面不遺失）
-  - 搜尋式股票選擇器（支援文字搜尋）
-  - 全選 / 批次操作
-  - 涵蓋所有上市 + 上櫃股票
-```
-
-### 📊 基本面分析（新功能）
-
-在「單檔分析」頁面新增了基本面分析功能：
-
-```
-操作步驟:
-  1. 選擇股票代號（如 2330）
-  2. 頁面自動顯示基本面指標卡
-  3. 包含：本益比、市帳率、ROE、ROA、淨利率、負債比、毛利率、EPS、BPS
-
-特色:
-  - 自動計算（無需額外 API 呼叫）
-  - 即時顯示（選擇股票後立即更新）
-  - 資料來源：MOPS 財務報表 + 最新收盤價
-  - 涵蓋所有上市 + 上櫃股票
-```
-
-### 🎯 選擇股票小技巧
-
-所有股票選擇器都支援**文字搜尋**，不需要 scroll 慢慢找：
-
-```
-輸入「2330」→ 顯示台積電
-輸入「穩懋」→ 顯示 3105 穩懋
-輸入「台積」→ 模糊匹配
-```
+| **投資組合管理** | 💼 組合價值追踪、權重分配、績效分析 |
+| **自動化報告** | 📊 市場摘要、股票報告、產業報告、週報/月報 |
 
 ---
 
-##  數據更新
+## 數據更新
 
 ### 日常更新（推薦）
 
@@ -128,7 +87,7 @@ python fetch_data.py --fundamentals-only
 
 ---
 
-##  CLI 使用
+## CLI 使用
 
 ### 查詢單檔股票
 
@@ -140,15 +99,15 @@ python main.py stock 2330
 
 ```
 📈 台積電 (2330)
-    產業: 半導體
-    收盤價: $995.00
-    漲跌: -5.00
-    技術指標:
+    產業：半導體
+    收盤價：$995.00
+    漲跌：-5.00
+    技術指標：
     - RSI(14): 45.23
     - MACD: 0.0523
     - SMA20: $980.50
     - SMA50: $970.30
-    - 波動率: 12.45%
+    - 波動率：12.45%
 ```
 
 ### 其他 CLI 命令
@@ -170,7 +129,7 @@ python main.py list_stocks           # 所有股票 (11,718 檔)
 
 ---
 
-##  Python API 使用
+## Python API 使用
 
 ### 1. 分析單檔股票
 
@@ -180,7 +139,7 @@ from core.analysis import StockAnalyzer
 analyzer = StockAnalyzer("2330")
 indicators = analyzer.get_latest_indicators()
 
-print(f"收盤價: ${indicators['收盤價']}")
+print(f"收盤價：${indicators['收盤價']}")
 print(f"RSI: {indicators['RSI_14']}")
 print(f"SMA20: ${indicators['SMA_20']}")
 ```
@@ -191,7 +150,7 @@ print(f"SMA20: ${indicators['SMA_20']}")
 from core.analysis import IndustryComparison
 
 stats = IndustryComparison.compare_industry_performance("半導體")
-print(f"上漲股數: {stats['上漲股數']}")
+print(f"上漲股數：{stats['上漲股數']}")
 
 leaders = IndustryComparison.get_industry_leaders("半導體", '成交金額', 10)
 gainers, losers = IndustryComparison.get_industry_gainers_losers("半導體", 5)
@@ -216,26 +175,6 @@ result = (StockFilter()
 ```
 
 ### 4. 操作族群標籤
-
-```python
-from core.data import data_query
-from core.themes import auto_tag_all_companies, get_stocks_by_tag
-
-# 建立標籤
-data_query.create_tag("AI 概念股", "2330")
-data_query.create_tag("AI 概念股", "2454")
-
-# 查詢標籤下的股票
-stocks = get_stocks_by_tag("AI 概念股")
-
-# 自動貼標（基於公司名稱關鍵字）
-auto_tag_all_companies()
-
-# 刪除標籤
-data_query.delete_tag("AI 概念股", "2330")
-```
-
-### 5. 基本面分析
 
 ```python
 from core.data import data_query
@@ -295,9 +234,62 @@ print(f"總報酬率：{results['總報酬率%']}%")
 print(f"勝率：{results['勝率%']}%")
 ```
 
+### 7. 投資組合管理（P4-1）
+
+```python
+from portfolio import Portfolio
+
+portfolio = Portfolio()
+
+# 添加股票
+portfolio.add_stock("2330", 0.5)  # 台積電 50%
+portfolio.add_stock("2454", 0.5)  # 聯發科 50%
+
+# 取得組合價值
+value = portfolio.get_portfolio_value()
+print(f"組合價值：${value:,.2f}")
+
+# 取得權重分配
+allocation = portfolio.get_allocation_summary()
+print("權重分配:")
+for stock, weight in allocation.items():
+    print(f"  {stock}: {weight*100:.1f}%")
+
+# 取得績效分析
+performance = portfolio.get_performance()
+print(f"年化報酬率：{performance['年化報酬率%']}%")
+print(f"最大虧損：{performance['最大虧損%']}%")
+```
+
+### 8. 自動化報告生成（P4-3）
+
+```python
+from report import ReportGenerator
+
+report_gen = ReportGenerator()
+
+# 生成市場摘要報告
+report_gen.generate_market_summary()
+
+# 生成單檔股票報告
+report_gen.generate_stock_report("2330")
+
+# 生成產業報告
+report_gen.generate_industry_report("半導體")
+
+# 生成篩選結果報告
+report_gen.generate_filter_report("bullish")
+
+# 匯出為 CSV
+report_gen.generate_report_to_csv("20260630")
+
+# 匯出為 HTML
+report_gen.generate_report_to_html("20260630")
+```
+
 ---
 
-##  核心類速查
+## 核心類速查
 
 ### data_query — 數據查詢
 
@@ -353,9 +345,36 @@ engine.add_signal(StrategyLibrary.sma_crossover_strategy)
 results = engine.backtest()
 ```
 
+### Portfolio — 投資組合管理（P4-1）
+
+```python
+from portfolio import Portfolio
+
+portfolio = Portfolio()
+portfolio.add_stock("2330", 0.5)
+portfolio.add_stock("2454", 0.5)
+
+portfolio.get_portfolio_value()
+portfolio.get_allocation_summary()
+portfolio.get_performance()
+```
+
+### ReportGenerator — 報告生成（P4-3）
+
+```python
+from report import ReportGenerator
+
+report_gen = ReportGenerator()
+report_gen.generate_market_summary()
+report_gen.generate_stock_report("2330")
+report_gen.generate_industry_report("半導體")
+report_gen.generate_report_to_csv("20260630")
+report_gen.generate_report_to_html("20260630")
+```
+
 ---
 
-##  常見使用場景
+## 常見使用場景
 
 ### 場景 1: 找尋現在的看漲股票
 
@@ -416,7 +435,7 @@ for stock in stocks:
 
 ---
 
-##  資料庫概覽
+## 資料庫概覽
 
 | 資料庫 | 內容 | 大小 |
 |---------|------|------|
@@ -427,10 +446,10 @@ for stock in stocks:
 ### 目前規模
 
 ```
-上市:   1,613 檔（2016 年起完整歷史）
-上櫃:  10,105 檔（2016 年起，99.9% 覆蓋率）
-合計:  11,718 檔股票/商品
-ETL:   9,810 個 JSON 檔案已處理
+上市：   1,613 檔（2016 年起完整歷史）
+上櫃：  10,105 檔（2016 年起，99.9% 覆蓋率）
+合計：  11,718 檔股票/商品
+ETL：   9,810 個 JSON 檔案已處理
 ```
 
 ---
@@ -446,7 +465,7 @@ ETL:   9,810 個 JSON 檔案已處理
 
 ---
 
-##  故障排除
+## 故障排除
 
 ### 找不到股票/產業？
 
@@ -487,7 +506,7 @@ $env:PYTHONIOENCODING='utf-8'; python fetch_data.py
 
 ---
 
-##  進階閱讀
+## 進階閱讀
 
 - [README.md](README.md) — 完整功能文檔與架構
 - [ARCHITECTURE.md](ARCHITECTURE.md) — 系統設計與架構決策
@@ -496,6 +515,8 @@ $env:PYTHONIOENCODING='utf-8'; python fetch_data.py
 - `core/themes.py` — 族群自動標籤
 - `ui/app.py` — Streamlit 儀表板代碼
 - `step2_etl_and_db.py` — 增量 ETL 實作
+- `portfolio.py` — 投資組合管理模組（P4-1）
+- `report.py` — 自動化報告生成模組（P4-3）
 
 ---
 

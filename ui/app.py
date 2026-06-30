@@ -180,6 +180,7 @@ page = st.sidebar.radio(
         "🏷️ 族群分析",
         "🔍 選股篩選",
         "🎯 回測策略",
+        "💼 投資組合管理",
     ]
 )
 
@@ -1101,8 +1102,8 @@ elif page == "🎯 回測策略":
                         engine.add_signal(StrategyLibrary.rsi_strategy)
                     else:  # MACD
                         engine.add_signal(StrategyLibrary.macd_strategy)
-                    
-                   results = engine.backtest()
+                     
+                 results = engine.backtest()
                 
                 # 顯示結果
                 st.success("回測完成！")
@@ -1135,48 +1136,48 @@ elif page == "🎯 回測策略":
                     st.metric("勝率", f"{results['勝率%']:.2f}%")
                 
                 with col7:
-                st.metric("交易次數", results['總交易次數'])
+                    st.metric("交易次數", results['總交易次數'])
                 
-                  # 風險調整指標
-                  col8, col9, col10 = st.columns(3)
-                  risk_metrics = results.get('風險指標', {})
+                # 風險調整指標
+                col8, col9, col10 = st.columns(3)
+                risk_metrics = results.get('風險指標', {})
                 
-                  with col8:
-                      sharpe = risk_metrics.get('sharpe_ratio', 0)
-                      st.metric("Sharpe 比率", f"{sharpe:.4f}")
+                with col8:
+                    sharpe = risk_metrics.get('sharpe_ratio', 0)
+                    st.metric("Sharpe 比率", f"{sharpe:.4f}")
                 
-                  with col9:
-                      sortino = risk_metrics.get('sortino_ratio', 0)
-                      st.metric("Sortino 比率", f"{sortino:.4f}")
+                with col9:
+                    sortino = risk_metrics.get('sortino_ratio', 0)
+                    st.metric("Sortino 比率", f"{sortino:.4f}")
                 
-                  with col10:
-                      calmar = risk_metrics.get('calmar_ratio', 0)
-                      st.metric("Calmar 比率", f"{calmar:.4f}")
+                with col10:
+                    calmar = risk_metrics.get('calmar_ratio', 0)
+                    st.metric("Calmar 比率", f"{calmar:.4f}")
                 
-                  # 組合淨值曲線
+                # 組合淨值曲線
                 st.subheader("📈 組合淨值曲線")
                 
-                  portfolio_df = results['組合淨值曲線']
+                portfolio_df = results['組合淨值曲線']
                 
-                  fig = go.Figure()
+                fig = go.Figure()
                 
-                  fig.add_trace(go.Scatter(
-                      x=portfolio_df['日期'],
-                      y=portfolio_df['組合總值'],
-                      name='組合總值',
-                      line=dict(color='green', width=2)
-                  ))
+                fig.add_trace(go.Scatter(
+                    x=portfolio_df['日期'],
+                    y=portfolio_df['組合總值'],
+                    name='組合總值',
+                    line=dict(color='green', width=2)
+                ))
                 
-                  fig.update_layout(
-                      title=f"{stock_id} 組合淨值曲線",
-                      yaxis_title="價值 ($)",
-                      xaxis_title="日期",
-                      template="plotly_white",
-                      height=400,
-                      hovermode='x unified'
-                  ))
+                fig.update_layout(
+                    title=f"{stock_id} 組合淨值曲線",
+                    yaxis_title="價值 ($)",
+                    xaxis_title="日期",
+                    template="plotly_white",
+                    height=400,
+                    hovermode='x unified'
+                ))
                 
-                  st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True)
                 
                 # 交易清單
                 if results['交易清單']:
@@ -1191,6 +1192,202 @@ elif page == "🎯 回測策略":
 # ============================================================================
 # 多股組合回測頁面
 # ============================================================================
+
+elif page == "💼 投資組合管理":
+    st.title("💼 投資組合管理")
+    
+    st.caption("管理多股票投資組合，追蹤績效與重新平衡")
+    
+    # 股票選擇
+    st.markdown("**選擇投資組合股票**")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        stock1 = searchable_stock_select("股票 1", "portfolio_stock1")
+    
+    with col2:
+        stock2 = searchable_stock_select("股票 2", "portfolio_stock2")
+    
+    with col3:
+        stock3 = searchable_stock_select("股票 3", "portfolio_stock3")
+    
+    # 收集股票
+    selected_stocks = []
+    if stock1:
+        selected_stocks.append(stock1)
+    if stock2:
+        selected_stocks.append(stock2)
+    if stock3:
+        selected_stocks.append(stock3)
+    
+    if not selected_stocks:
+        st.warning("請至少選擇一檔股票")
+    elif len(selected_stocks) < 2:
+        st.info("建議至少選擇 2 檔股票進行組合回測")
+    
+    # 權重分配
+    col4, col5 = st.columns(2)
+    with col4:
+        initial_capital = st.number_input("初始資本", value=100000, min_value=1000, step=1000)
+    with col5:
+        weight_mode = st.radio("權重分配", ["均等分配", "自訂權重"], key="portfolio_weights")
+        
+        if weight_mode == "自訂權重":
+            weights = []
+            for i, stock in enumerate(selected_stocks):
+                weight = st.number_input(f"{stock} 權重", value=1.0/len(selected_stocks), min_value=0.01, max_value=1.0, key=f"weight_{stock}", step=0.01)
+                weights.append(weight)
+    
+    if st.button("建立投資組合", type="primary", disabled=len(selected_stocks) < 2):
+        with st.spinner("建立投資組合中..."):
+            try:
+                from portfolio import Portfolio
+                
+                # 建立投資組合
+                if weight_mode == "均等分配":
+                    portfolio = Portfolio(selected_stocks, initial_capital=initial_capital)
+                else:
+                    portfolio = Portfolio(selected_stocks, weights=weights, initial_capital=initial_capital)
+                
+                # 顯示投資組合資訊
+                st.success("投資組合建立完成！")
+                
+                # 基本資訊
+                st.subheader("📋 投資組合基本資訊")
+                
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("股票數", len(selected_stocks))
+                with col2:
+                    st.metric("初始資本", f"${initial_capital:,.0f}")
+                with col3:
+                    portfolio_value = portfolio.get_portfolio_value()
+                    st.metric("組合總值", f"${portfolio_value['總值']:,.0f}")
+                with col4:
+                    st.metric("平均價格", f"${portfolio.get_allocation_summary()['平均價格']:.2f}")
+                
+                # 投資分配
+                st.subheader("📊 投資分配")
+                
+                allocation = portfolio.get_allocation_summary()
+                st.markdown(f"**{allocation['股票數']} 檔股票** | 平均價格: ${allocation['平均價格']:.2f}")
+                
+                # 顯示各股票價值
+                for item in portfolio_value['股票列表']:
+                    st.markdown(f"**{item['股票']}** ({item['代號']})")
+                    st.metric("價格", f"${item['價格']:.2f}", delta=f"權重 {item['權重%']}%")
+                
+                # 績效分析
+                st.subheader("📈 績效分析")
+                
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    start_date = st.date_input("開始日期", value=datetime.now() - timedelta(days=365))
+                with col2:
+                    end_date = st.date_input("結束日期", value=datetime.now())
+                
+                if st.button("計算績效", type="primary"):
+                    with st.spinner("計算績效中..."):
+                        try:
+                            perf = portfolio.get_performance(
+                                start_date.strftime('%Y-%m-%d'),
+                                end_date.strftime('%Y-%m-%d')
+                            )
+                            st.success("績效計算完成！")
+                            
+                            col1, col2, col3, col4 = st.columns(4)
+                            with col1:
+                                st.metric("平均報酬率", f"{perf['平均報酬率%']:.2f}%")
+                            with col2:
+                                st.metric("最大報酬率", f"{perf['最大報酬率%']:.2f}%")
+                            with col3:
+                                st.metric("最小報酬率", f"{perf['最小報酬率%']:.2f}%")
+                            with col4:
+                                st.metric("標準差", f"{perf['標準差%']:.2f}%")
+                            
+                            col5, col6 = st.columns(2)
+                            with col5:
+                                st.metric("最大回撤", f"{perf['最大回撤%']:.2f}%")
+                            with col6:
+                                st.metric("回測天數", perf['回測天數'])
+                            
+                            # 重新平衡
+                            if st.button("重新平衡投資組合", type="secondary"):
+                                rebalance_result = portfolio.rebalance()
+                                st.success("重新平衡完成！")
+                                st.metric("新資本", f"${rebalance_result['新資本']:,.0f}")
+                            
+                        except Exception as e:
+                            st.error(f"績效計算失敗: {str(e)}")
+                
+                # 投資組合價值曲線
+                st.subheader("📈 投資組合價值曲線")
+                
+                if st.button("繪製價值曲線"):
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        start_date = st.date_input("開始日期", value=datetime.now() - timedelta(days=365))
+                    with col2:
+                        end_date = st.date_input("結束日期", value=datetime.now())
+                    with col3:
+                        days = st.slider("回測天數", value=365, min_value=30, max_value=1095, step=30)
+                    
+                    if st.button("繪製"):
+                        with st.spinner("繪製中..."):
+                            try:
+                                # 取得所有股票的價格歷史
+                                price_data = {}
+                                for stock_id in selected_stocks:
+                                    df = data_query.get_stock_price_history(stock_id,
+                                                                              start_date.strftime('%Y-%m-%d'),
+                                                                              end_date.strftime('%Y-%m-%d'))
+                                    if not df.empty:
+                                        price_data[stock_id] = df['收盤價'].values
+                
+                                if not price_data:
+                                    st.warning("沒有足夠的歷史數據")
+                                else:
+                                    # 計算組合價值
+                                    dates = [i for i in range(min(len(df) for df in [pd.DataFrame(d) for d in price_data.values()]))]
+                                    
+                                    portfolio_values = []
+                                    for date_idx in range(len(dates)):
+                                        prices = []
+                                        for stock_id, prices_list in price_data.items():
+                                            if date_idx < len(prices_list):
+                                                prices.append(prices_list[date_idx])
+                                        
+                                        if len(prices) > 0:
+                                            weighted_value = sum(w * p for w, p in zip(portfolio.weights, prices))
+                                            portfolio_values.append(weighted_value)
+                                    
+                                    if portfolio_values:
+                                        # 繪製曲線
+                                        fig = go.Figure()
+                                        fig.add_trace(go.Scatter(
+                                            x=[datetime.now() - timedelta(days=len(dates)-i) for i in range(len(dates))],
+                                            y=portfolio_values,
+                                            mode='lines',
+                                            name='組合價值',
+                                            line=dict(color='green', width=2)
+                                        ))
+                                        
+                                        fig.update_layout(
+                                            title="投資組合價值曲線",
+                                            yaxis_title="價值 ($)",
+                                            xaxis_title="日期",
+                                            template="plotly_white",
+                                            height=400,
+                                            hovermode='x unified'
+                                        )
+                                        
+                                        st.plotly_chart(fig, use_container_width=True)
+                            except Exception as e:
+                                st.error(f"繪製失敗: {str(e)}")
+                
+            except Exception as e:
+                st.error(f"建立投資組合失敗: {str(e)}")
 
 elif mode == "多股組合回測":
     st.subheader("📊 多股組合回測")
@@ -1267,26 +1464,26 @@ elif mode == "多股組合回測":
                 with col6:
                     st.metric("勝率", f"{results['勝率%']:.2f}%")
                 
-                with col7:
-                st.metric("交易次數", results['總交易次數'])
+              with col7:
+                    st.metric("交易次數", results['總交易次數'])
                 
-                  # 風險調整指標
-                  col8, col9, col10 = st.columns(3)
-                  risk_metrics = results.get('風險指標', {})
+                # 風險調整指標
+                col8, col9, col10 = st.columns(3)
+                risk_metrics = results.get('風險指標', {})
                 
-                  with col8:
-                      sharpe = risk_metrics.get('sharpe_ratio', 0)
-                      st.metric("Sharpe 比率", f"{sharpe:.4f}")
+                with col8:
+                    sharpe = risk_metrics.get('sharpe_ratio', 0)
+                    st.metric("Sharpe 比率", f"{sharpe:.4f}")
                 
-                  with col9:
-                      sortino = risk_metrics.get('sortino_ratio', 0)
-                      st.metric("Sortino 比率", f"{sortino:.4f}")
+                with col9:
+                    sortino = risk_metrics.get('sortino_ratio', 0)
+                    st.metric("Sortino 比率", f"{sortino:.4f}")
                 
-                  with col10:
-                      calmar = risk_metrics.get('calmar_ratio', 0)
-                      st.metric("Calmar 比率", f"{calmar:.4f}")
+                with col10:
+                    calmar = risk_metrics.get('calmar_ratio', 0)
+                    st.metric("Calmar 比率", f"{calmar:.4f}")
                 
-                  # 組合淨值曲線
+                # 組合淨值曲線
                 st.subheader("📈 組合淨值曲線")
                 
                 portfolio_df = results['組合淨值曲線']

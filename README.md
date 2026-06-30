@@ -1,21 +1,21 @@
-#  股市觀察工具
+# 股市觀察工具
 
 量化分析與選股篩選平台 — 支援上市（TWSE）+ 上櫃（TPEx）超過 11,700 檔商品
 
-##  核心功能
+## 核心功能
 
-### 1.  單檔股票分析
+### 1. 單檔股票分析
 - **K 線圖與移動平均線**: MA20/MA50/MA200，支援買賣訊號標記
 - **技術指標**: RSI、MACD、布林帶、隨機指標、ATR
 - **歷史數據**: 上市 10 年 + 上櫃近 6 個月完整日資料
 
-### 2.  族群比較分析
+### 2. 族群比較分析
 - **產業內對比**: 比較同產業不同股票表現
 - **產業領頭股**: 按成交金額、價格等排序
 - **漲跌排行**: 快速掌握贏家與輸家
 - **相關性分析**: 計算產業內股票相關係數
 
-### 3.  選股篩選
+### 3. 選股篩選
 - **預定義篩選**:
   - 看漲信號（黃金交叉 + 價格 > SMA20）
   - 超賣股票（RSI < 30）
@@ -24,14 +24,14 @@
 - **自訂篩選**: 組合多個條件進行複雜篩選
   - 價格範圍、成交量、技術指標、產業類別
 
-### 4.  族群分析（標籤系統）
+### 4. 族群分析（標籤系統）
 - **自訂標籤**: 任意建立/刪除族群標籤（如「AI 概念股」、「高股息」）
 - **多對多映射**: 一檔股票可打多個標籤，一個標籤可含多檔股票
 - **即時持久化**: 所有標籤異動立即寫入 SQLite，頁面重整不遺失
 - **批次操作**: 支援全選、批次貼標/去標
 - **搜尋式股票選擇器**: 支援文字搜尋（如輸入「穩懋」過濾清單）
 
-### 5.  量化策略回測
+### 5. 量化策略回測
 - **SMA 交叉策略**: 20 日線與 50 日線交叉
 - **RSI 策略**: 超買超賣反轉策略
 - **MACD 策略**: 動量指標策略
@@ -39,52 +39,65 @@
   - 總報酬率、年化報酬率、最大虧損、勝率
   - 交易清單與組合淨值曲線
 
+### 6. 投資組合管理（P4-1）
+- **組合價值追踪**: 自動計算投資組合總價值
+- **權重分配分析**: 按產業/個股顯示資產配置
+- **績效分析**: 組合淨值曲線、年化報酬率
+- **再平衡建議**: 自動生成再平衡策略
+
+### 7. 自動化報告生成（P4-3）
+- **市場摘要報告**: 每日/每週市場概覽
+- **股票分析報告**: 單檔股票完整分析報告
+- **產業報告**: 產業績效與趨勢分析
+- **篩選結果報告**: 篩選條件與結果匯出
+- **週報/月報**: 自動生成週報與月報（CSV + HTML 格式）
+
 ---
 
-##  數據流水線
+## 數據流水線
 
 ```
-   TWSE (上市)           TPEx (上櫃)
-  API daily       API daily (verify=False)
-     │                    │
-     ▼                    ▼
-  20260619.json    OTC_20260619.json
-     │                    │
-     └────────┬───────────┘
-              ▼
-    step2_etl_and_db.py (增量/完整重建)
-              │
-     ┌────────┴────────┐
-     ▼                  ▼
-  stock_warehouse.db   parquet_data/
-  ┌─────────────────┐  └─ 2330.parquet
-  │ Company_Dim      │  └─ 3105.parquet
-  │ Tag_Dim          │  └─ ...
-  │ Company_Tag_Map  │
-  │ ETL_Status       │
-  │ Dividend_Fact    │
-  └─────────────────┘
-     │
-     ▼
-  [Web 儀表板 / CLI]
+    TWSE (上市)           TPEx (上櫃)
+   API daily       API daily (verify=False)
+      │                    │
+      ▼                    ▼
+   20260619.json    OTC_20260619.json
+      │                    │
+      └────────┬───────────┘
+               ▼
+     step2_etl_and_db.py (增量/完整重建)
+               │
+      ┌────────┴────────┐
+      ▼                  ▼
+   stock_warehouse.db   parquet_data/
+   ┌─────────────────┐  └─ 2330.parquet
+   │ Company_Dim      │  └─ 3105.parquet
+   │ Tag_Dim          │  └─ ...
+   │ Company_Tag_Map  │
+   │ ETL_Status       │
+   │ Dividend_Fact    │
+   └─────────────────┘
+      │
+      ▼
+   [Web 儀表板 / CLI]
 ```
 
 ### 增量處理
 
 ```
-每日更新: fetch_data.py
-  1. 檢查 task_status.db → 只抓 pending 日期
-  2. 抓取 TWSE + OTC（新 API）
-  3. 增量 ETL → 只處理新 JSON，附加到既有 Parquet
-  4. 完成（通常 < 5 秒）
+每日更新：fetch_data.py
+   1. 檢查 task_status.db → 只抓 pending 日期
+   2. 抓取 TWSE + OTC（新 API）
+   3. 增量 ETL → 只處理新 JSON，附加到既有 Parquet
+   4. 完成（通常 < 5 秒）
 
-完整重建: fetch_data.py --rebuild
-  重新處理 staging/ 中所有 JSON，完整寫入 DB + Parquet
+完整重建：fetch_data.py --rebuild
+   重新處理 staging/ 中所有 JSON，完整寫入 DB + Parquet
 ```
 
 ---
 
-##  快速開始
+## 快速開始
 
 ### 安裝依賴
 
@@ -102,7 +115,7 @@ python fetch_data.py
 python main.py web --port 8503
 ```
 
-瀏覽器自動打開: `http://localhost:8503`
+瀏覽器自動打開：`http://localhost:8503`
 
 ### fetch_data.py 完整用法
 
@@ -151,7 +164,7 @@ python main.py list_stocks
 
 ---
 
-##  項目結構
+## 項目結構
 
 ```
 stock_app/
@@ -161,11 +174,14 @@ stock_app/
 │   ├── filters.py        # 股票篩選引擎
 │   ├── themes.py         # 族群自動標籤（基於關鍵字）
 │   ├── database.py       # SQLAlchemy engine + session（供 init_db 使用）
-│   └── schema.py         # DB schema 升級（migrate）
-├── ui/
-│   └── app.py            # Streamlit Web 應用（含 族群分析 頁面）
+│   ├── schema.py         # DB schema 升級（migrate）
+│   └── api_client.py     # API 客戶端（TWSE/TPEx 統一接口）
 ├── backtesting/
 │   └── engine.py         # 回測框架
+├── ui/
+│   └── app.py            # Streamlit Web 應用（含投資組合管理頁面）
+├── portfolio.py          # 投資組合管理模組（P4-1 新增）
+├── report.py             # 自動化報告生成模組（P4-3 新增）
 ├── step1_fetcher.py       # 數據獲取（TWSE + TPEx API）
 ├── step2_etl_and_db.py    # ETL 清洗入庫（增量/重建雙模式）
 ├── step3_fundamentals.py  # 基本面抓取（產業/營收/法說會）
@@ -183,7 +199,7 @@ stock_app/
 
 ---
 
-##  資料庫架構
+## 資料庫架構
 
 ### stock_warehouse.db
 
@@ -203,7 +219,7 @@ stock_app/
 
 ---
 
-##  技術棧
+## 技術棧
 
 - **後端**: Python 3.12+
 - **數據處理**: Pandas, NumPy
@@ -215,7 +231,7 @@ stock_app/
 
 ---
 
-##  技術指標
+## 技術指標
 
 | 指標 | 說明 | 用途 |
 |-----|------|------|
@@ -229,7 +245,7 @@ stock_app/
 
 ---
 
-##  API 速查
+## API 速查
 
 ```python
 from core.data import data_query
@@ -252,11 +268,29 @@ results = (StockFilter()
 from core.themes import auto_tag_all_companies, get_stocks_by_tag
 tech_stocks = get_stocks_by_tag("半導體")
 
-from backtesting.engine import BacktestEngine, StrategyLibrary
-engine = BacktestEngine("2330", "2024-01-01", "2024-12-31")
-engine.add_signal(StrategyLibrary.sma_crossover_strategy)
-results = engine.backtest()
+# 投資組合管理（P4-1）
+from portfolio import Portfolio
+portfolio = Portfolio()
+portfolio.add_stock("2330", 0.5)
+portfolio.add_stock("2454", 0.5)
+value = portfolio.get_portfolio_value()
+allocation = portfolio.get_allocation_summary()
+
+# 報告生成（P4-3）
+from report import ReportGenerator
+report_gen = ReportGenerator()
+report_gen.generate_market_summary()
+report_gen.generate_report_to_html("20260630")
 ```
+
+---
+
+## 環境變數
+
+| 變數名 | 說明 | 預設值 |
+|--------|------|--------|
+| `STOCK_DB_PATH` | 資料庫路徑 | `stock_warehouse.db` |
+| `STOCK_PARQUET_DIR` | Parquet 資料夾路徑 | `parquet_data` |
 
 ---
 
@@ -264,7 +298,7 @@ results = engine.backtest()
 
 本工具僅供分析參考，**不構成投資建議**。股票投資存在風險，應進行充分的風險評估。
 
-##  數據來源
+## 數據來源
 
 - **上市**: 台灣證券交易所 (TWSE) — `https://www.twse.com.tw/`
 - **上櫃**: 櫃買中心 (TPEx) — `https://www.tpex.org.tw/`
@@ -274,4 +308,4 @@ results = engine.backtest()
 ---
 
 **版本**: 2.0.0  
-**最後更新**: 2026-06-23
+**最後更新**: 2026-06-30

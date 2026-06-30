@@ -1,12 +1,12 @@
-#  架構設計文檔
+# 架構設計文檔
 
-##  整體架構
+## 整體架構
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
 │                         Web 儀表板 (Streamlit UI)                         │
 │  ┌─────────────┬──────────────┬──────────────┬──────────────┬──────────┐  │
-│  │  單檔分析   │  族群比較    │  選股篩選    │  回測策略    │ 族群分析  │  │
+│  │  單檔分析   │  族群比較    │  選股篩選    │  回測策略    │ 投資組合  │  │
 │  └─────────────┴──────────────┴──────────────┴──────────────┴──────────┘  │
 └─────────────────────────────┬────────────────────────────────────────────┘
                               │
@@ -39,6 +39,26 @@
 │  │ - StockDataQuery: 統一數據查詢 API (SQLite + Parquet 雙存儲)        │  │
 │  │ + core/database.py: SQLAlchemy engine (供 init_db.py 使用)          │  │
 │  └─────────────────────────────────────────────────────────────────────┘  │
+│  ┌─────────────────────────────────────────────────────────────────────┐  │
+│  │ API Client Layer (api/api_client.py)                                │  │
+│  │ - TWSEClient: 台灣證券交易所 API                                    │  │
+│  │ - TPExClient: 櫃買中心 API                                          │  │
+│  └─────────────────────────────────────────────────────────────────────┘  │
+│  ┌─────────────────────────────────────────────────────────────────────┐  │
+│  │ Portfolio Layer (portfolio.py)                                      │  │
+│  │ - Portfolio: 投資組合管理                                           │  │
+│  │ - get_portfolio_value(): 組合總價值                                │  │
+│  │ - get_allocation_summary(): 權重分配                                │  │
+│  │ - get_performance(): 績效分析                                      │  │
+│  └─────────────────────────────────────────────────────────────────────┘  │
+│  ┌─────────────────────────────────────────────────────────────────────┐  │
+│  │ Report Generation Layer (report.py)                                 │  │
+│  │ - ReportGenerator: 報告生成器                                       │  │
+│  │ - generate_market_summary(): 市場摘要                                │  │
+│  │ - generate_stock_report(): 股票報告                                  │  │
+│  │ - generate_industry_report(): 產業報告                               │  │
+│  │ - generate_report_to_csv()/generate_report_to_html(): 匯出           │  │
+│  └─────────────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────┬────────────────────────────────────────────┘
                               │
 ┌─────────────────────────────┴────────────────────────────────────────────┐
@@ -63,8 +83,7 @@
 │  │  ┌──────────────────────────────────────┐            │                │
 │  │  │ ETL_Status                           │            │                │
 │  │  │ JSON 檔案 ETL 處理狀態 (9,810 筆)    │            │                │
-│  │  └──────────────────────────────────────┘            │                │
-│  └──────────────────────────────────────────────────────┘                │
+│  └──────────────────────────────────────────────┘                │        │
 │                                                                          │
 │  ┌─────────────────────────────────────────────────────────────┐         │
 │  │     Parquet 檔案 (parquet_data/)                             │         │
@@ -78,7 +97,7 @@
 
 ---
 
-##  數據流水線（Pipeline）
+## 數據流水線（Pipeline）
 
 ### 雙源頭數據擷取
 
@@ -89,12 +108,12 @@ https://www.twse.com.tw/        https://www.tpex.org.tw/
      │ verify=True                    │ verify=False (SSL 憑證問題)
      │                               │
      ▼                               ▼
- 20260619.json                  OTC_20260619.json
- (fields9/data9 格式)           (tables[0].fields/data 格式)
+  20260619.json                  OTC_20260619.json
+  (fields9/data9 格式)           (tables[0].fields/data 格式)
      │                               │
      └───────────┬───────────────────┘
                  ▼
-       step2_etl_and_db.py
+         step2_etl_and_db.py
 ```
 
 ### ETL 處理模式
@@ -103,17 +122,17 @@ https://www.twse.com.tw/        https://www.tpex.org.tw/
 
 ```
 步驟:
-  1. 檢查 ETL_Status 表 → 找出 status=pending 的 JSON 檔案
-  2. 只讀取 pending 檔案，解析 + 清洗
-  3. 按股票代號分組
-  4. 對每檔股票:
-     a. 讀取現有 parquet（若存在）
-     b. 附加新資料行
-     c. 去重 + 排序 → 回寫
-  5. 更新 Company_Dim（新股票才 INSERT）
-  6. 標記檔案為 done
+   1. 檢查 ETL_Status 表 → 找出 status=pending 的 JSON 檔案
+   2. 只讀取 pending 檔案，解析 + 清洗
+   3. 按股票代號分組
+   4. 對每檔股票:
+      a. 讀取現有 parquet（若存在）
+      b. 附加新資料行
+      c. 去重 + 排序 → 回寫
+   5. 更新 Company_Dim（新股票才 INSERT）
+   6. 標記檔案為 done
 
-優點: 只處理新資料，秒級完成
+優點：只處理新資料，秒級完成
 ```
 
 #### 模式 B：完整重建
@@ -123,41 +142,41 @@ python step2_etl_and_db.py --rebuild
 python fetch_data.py --rebuild
 
 步驟:
-  1. 讀取 staging/ 中所有 JSON（上市 + 上櫃）
-  2. 全部合併 → 按股票代號分組
-  3. 重新寫入所有 parquet 檔案
-  4. 更新 Company_Dim
-  5. 全部標記為 done
+   1. 讀取 staging/ 中所有 JSON（上市 + 上櫃）
+   2. 全部合併 → 按股票代號分組
+   3. 重新寫入所有 parquet 檔案
+   4. 更新 Company_Dim
+   5. 全部標記為 done
 
-優點: 修復資料一致性
-缺點: 約 10-12 分鐘
+優點：修復資料一致性
+缺點：約 10-12 分鐘
 ```
 
 ### 抓取流程（fetch_data.py）
 
 ```
-                      fetch_data.py
-                            │
-         ┌──────────────────┼──────────────────┐
-         ▼                  ▼                  ▼
-  --fetch-only        --etl-only         預設（抓取+ETL）
-     │                   │                   │
-     ▼                   ▼                   │
-  step1_fetcher      step2_etl_db           │
-  ┌──────────┐      ┌────────────┐          │
-  │ init_db  │      │ ETL_Status │          │
-  │ fetch_id │      │ (增量)     │          │
-  │ fetch_otc│      │ or --rebuild          │
-  └──────────┘      └────────────┘          │
-         └──────────────────┬────────────────┘
-                            ▼
-              step3_fundamentals.py
-              (選擇性，--with-fundamentals)
+                       fetch_data.py
+                             │
+          ┌──────────────────┼──────────────────┐
+          ▼                  ▼                  ▼
+   --fetch-only        --etl-only         預設（抓取+ETL）
+      │                   │                   │
+      ▼                   ▼                   │
+   step1_fetcher      step2_etl_db           │
+   ┌──────────┐      ┌────────────┐          │
+   │ init_db  │      │ ETL_Status │          │
+   │ fetch_id │      │ (增量)     │          │
+   │ fetch_otc│      │ or --rebuild          │
+   └──────────┘      └────────────┘          │
+          └──────────────────┬────────────────┘
+                             ▼
+               step3_fundamentals.py
+               (選擇性，--with-fundamentals)
 ```
 
 ---
 
-##  資料庫 Schema
+## 資料庫 Schema
 
 ### stock_warehouse.db
 
@@ -217,7 +236,7 @@ CREATE TABLE fetch_status (
 
 ---
 
-##  資料流向場景
+## 資料流向場景
 
 ### 場景 1：用戶查詢單檔股票分析
 
@@ -283,9 +302,42 @@ For each day in date_range:
 Display: 返回率、勝率、淨值曲線
 ```
 
+### 場景 5：投資組合管理（P4-1）
+
+```
+User Input: 選擇股票 + 設定權重
+    ↓
+Portfolio.add_stock("2330", 0.5)
+Portfolio.add_stock("2454", 0.5)
+    ↓
+portfolio.get_portfolio_value()  → 組合總價值
+portfolio.get_allocation_summary() → 權重分配
+portfolio.get_performance()      → 績效分析
+    ↓
+Display: 組合價值 + 淨值曲線 + 權重分配
+```
+
+### 場景 6：自動化報告生成（P4-3）
+
+```
+User Input: 選擇報告類型 + 日期範圍
+    ↓
+ReportGenerator()
+    ├─ generate_market_summary()   → 市場摘要
+    ├─ generate_stock_report()    → 股票報告
+    ├─ generate_industry_report() → 產業報告
+    ├─ generate_filter_report()   → 篩選結果報告
+    ├─ generate_weekly_report()   → 週報
+    └─ generate_monthly_report()  → 月報
+    ↓
+匯出: CSV / HTML
+    ↓
+Display: 報告內容
+```
+
 ---
 
-##  Web UI 架構
+## Web UI 架構
 
 ```
 ui/app.py (Streamlit multi-page)
@@ -296,12 +348,24 @@ ui/app.py (Streamlit multi-page)
     │   ├─ 🏷️ 族群分析 ← NEW
     │   │   └─ 標籤建立/刪除 + 搜尋式股票選擇器
     │   ├─ 🔍 選股篩選
-    │   └─ 🎯 回測策略
+    │   ├─ 🎯 回測策略
+    │   └─ 💼 投資組合管理 ← NEW (P4-2)
     │
     └─ 頁面內容
         ├─ 搜尋式股票選擇器（支援文字搜尋）
         ├─ Plotly 交互式圖表
-        └─ Pandas DataFrame 表格
+        ├─ Pandas DataFrame 表格
+        └─ 投資組合管理頁面（P4-2 新增）
+            ├─ 💼 投資組合管理
+            │   ├─ 權重分配
+            │   ├─ 績效分析
+            │   └─ 價值曲線圖
+            └─ 📊 自動化報告
+                ├─ 市場摘要
+                ├─ 股票報告
+                ├─ 產業報告
+                ├─ 篩選結果報告
+                └─ 週報/月報
 ```
 
 ### 主要元件
@@ -315,7 +379,7 @@ ui/app.py (Streamlit multi-page)
 
 ---
 
-##  設計原則
+## 設計原則
 
 ### 1. **分層隔離** (Layering)
 - 數據訪問層屏蔽存儲細節（SQLite vs Parquet）
@@ -344,7 +408,7 @@ ui/app.py (Streamlit multi-page)
 
 ---
 
-##  擴展指南
+## 擴展指南
 
 ### 添加新技術指標
 
@@ -392,7 +456,7 @@ engine.add_signal(StrategyLibrary.new_strategy)
 
 ---
 
-##  性能優化
+## 性能優化
 
 ### 1. 數據結構
 - Parquet: 列式存儲，壓縮率高，查詢快
@@ -416,7 +480,7 @@ engine.add_signal(StrategyLibrary.new_strategy)
 
 ---
 
-##  安全與可靠性
+## 安全與可靠性
 
 ### TPEx SSL 處理
 - 櫃買中心憑證驗證失敗 → 使用 `verify=False`
@@ -444,10 +508,40 @@ engine.add_signal(StrategyLibrary.new_strategy)
 5. **即時數據**: WebSocket 連接 TWSE/TPEx 即時行情
 6. **高級指標**: 期貨指數、融資融券數據
 7. **機器學習**: 價格預測、異常檢測
-8. **投資組合**: 多檔資產配置、風險管理
+8. **投資組合**: 多檔資產配置、風險管理 ✅ 已完成（P4-1）
 9. **API 服務**: REST API 供第三方調用
 10. **行動應用**: iOS/Android 應用
 11. **國際市場**: 美股/港股等其他交易所
+
+---
+
+## 版本歷史
+
+### v2.0.0 (2026-06-30)
+- P0-1: API 指數退避重試機制
+- P0-2: ETL 資料品質校驗 + 資料新鮮度追蹤
+- P0-3: 解耦 fetch_data.py 與 step1_fetcher.py（新增 api_client.py）
+- P0-4: SQLite 連線池 (ConnectionPool) + 資料品質校驗
+- P0-5: UI 側邊欄資料新鮮度與待抓取天數顯示
+- P1-1: 基本面分析模組 (FundamentalAnalyzer)
+- P1-2: 多股組合回測 (BacktestEngine 支援 stock_ids)
+- P1-3: SMA 交叉策略邏輯修正（黃金交叉/死叉偵測）
+- P1-4: 風險調整指標 (Sharpe/Sortino/Calmar) — RiskMetrics 類別
+- P1-5: 除權息調整（adjust_prices 參數 + 調整後價格欄位）
+- P1-6: 營收趨勢圖 (GroupAnalysis.group_revenue_performance)
+- P1-7: 多股票對照頁（searchable_multi_stock_select）
+- P2-1: UI 介面優化（搜尋式股票下拉選單、頁面佈局）
+- P2-2: 選股篩選器增強（批次篩選 filter_with_batch、P/E/ROE/市值/殖利率篩選）
+- P2-3: 回測結果更精確（預處理價格序列、優化交易邏輯）
+- P2-4: 除權息事件加入分析（與 P1-5 重複，已在 P1-5 完成）
+- P3-1: 錯誤處理與健壯性 — main.py 所有公開函數包裹 try/except
+- P3-2: 效能優化 — core/data.py 新增快取機制 (cache_get/cache_set, TTL=300s)
+- P3-3: 檔案路徑處理 — 新增 STOCK_DB_PATH/STOCK_PARQUET_DIR 環境變數
+- P3-4: 回測引擎多檔優化 — 修正 add_signal 方法縮排、macd_strategy 語法錯誤
+- P3-5: 資料庫查詢優化 — 新增 14 個索引、修正 filters.py filter_with_batch 重複 return 錯誤
+- P4-1: 投資組合管理 — 新增 portfolio.py（Portfolio 類別）
+- P4-2: 數據可視化增強 — UI 新增「💼 投資組合管理」頁面
+- P4-3: 自動化報告生成 — 新增 report.py（ReportGenerator 類別）
 
 ---
 

@@ -201,7 +201,6 @@ class StockFilter:
                 continue
         
         return results
-        return self
     
     def filter_by_moving_average_cross(self) -> 'StockFilter':
         """黃金交叉篩選 (SMA_20 > SMA_50)"""

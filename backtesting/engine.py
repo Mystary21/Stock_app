@@ -60,11 +60,11 @@ class BacktestEngine:
             if stock_id not in self.multi_data:
                 continue
             
-             # 複製技術指標
+           # 複製技術指標
             for col in ['SMA_20', 'SMA_50', 'RSI_14', 'MACD', 'MACD_Signal']:
                 if col in analyzer.df.columns:
                     self.multi_data[stock_id][col] = analyzer.df[col].values
-    
+
     def _apply_price_adjustments(self):
         """應用除權息價格調整"""
         if not self.adjust_prices:
@@ -81,8 +81,8 @@ class BacktestEngine:
                     self.multi_data[stock_id]['調整後價格'] = adjusted_df['調整後價格'].values
             except Exception:
                 pass  # 除權息調整失敗時忽略
-        
-        def add_signal(self, signal_func: Callable[[pd.DataFrame, int], Dict]) -> 'BacktestEngine':
+
+    def add_signal(self, signal_func: Callable[[pd.DataFrame, int], Dict]) -> 'BacktestEngine':
         """
         添加交易信號函數
         
@@ -516,7 +516,7 @@ class StrategyLibrary:
         
         if macd > signal:
             return {'action': 'BUY', 'confidence': 0.7}
-        el       if macd < signal:
+        elif macd < signal:
             return {'action': 'SELL', 'confidence': 0.7}
         else:
             return {'action': 'HOLD', 'confidence': 0}
